@@ -21,6 +21,7 @@ EPOCHS = 500
 CHECKPOINT_INTERVAL = 100
 SEED_LENGTH = 4
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Using device: {DEVICE}")
 
 # Tokenization Parameters
 INTERVAL_RANGE = (-24, 24)
