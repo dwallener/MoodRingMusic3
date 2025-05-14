@@ -189,6 +189,12 @@ def evaluate_checkpoint(checkpoint_path):
     validate(model, val_data)
 
 if __name__ == "__main__":
+
+    # check for CUDA and log it
+    # import torch
+    print(torch.cuda.is_available())
+    print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else "No CUDA Device Found")
+
     parser = argparse.ArgumentParser(description="Tiny Composer Melody Transformer Trainer")
     parser.add_argument("--meta_csv", type=str, default=META_CSV, help="Path to metadata CSV")
     parser.add_argument("--midi_base", type=str, default=MIDI_BASE, help="Base path to MIDI files")
