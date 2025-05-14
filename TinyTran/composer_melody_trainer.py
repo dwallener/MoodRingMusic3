@@ -13,12 +13,13 @@ import pretty_midi
 # --------------------
 # CONFIGURATION (Defaults)
 # --------------------
-META_CSV = "maestro_midi_metadata.csv"
+META_CSV = "annotated_csv.csv"
 MIDI_BASE = "maestro-v3.0.0/"
 COMPOSER = "Chopin"
 SAVE_DIR = "checkpoints"
 EPOCHS = 500
 CHECKPOINT_INTERVAL = 100
+SEED_LENGTH = 4
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Tokenization Parameters
@@ -60,10 +61,10 @@ def build_dataset():
     sequences = []
     for fname in tqdm(files):
         intervals = extract_melody_intervals(os.path.join(MIDI_BASE, fname))
-        if len(intervals) >= 34:
-            for i in range(len(intervals) - 34):
-                seed = intervals[i:i+2]
-                target = intervals[i+2:i+34]
+        if len(intervals) >= SEED_LENGTH + 32:
+            for i in range(len(intervals) - (SEED_LENGTH + 32)):
+                seed = intervals[i:i+SEED_LENGTH]
+                target = intervals[i+SEED_LENGTH:i+SEED_LENGTH+32]
                 sequences.append((seed, target))
     return sequences
 
@@ -103,11 +104,16 @@ def train():
         model.train()
         total_loss = 0
         for seed, target in tqdm(train_data):
-            seed_tensor = torch.tensor([INTERVAL_VOCAB.index(i) for i in seed], dtype=torch.long).unsqueeze(1).to(DEVICE)
-            target_tensor = torch.tensor([INTERVAL_VOCAB.index(i) for i in target], dtype=torch.long).to(DEVICE)
+            # Prepare inputs and targets correctly
+            input_seq = seed + target[:-1]
+            target_seq = target
+
+            input_tensor = torch.tensor([INTERVAL_VOCAB.index(i) for i in input_seq], dtype=torch.long).unsqueeze(1).to(DEVICE)
+            target_tensor = torch.tensor([INTERVAL_VOCAB.index(i) for i in target_seq], dtype=torch.long).to(DEVICE)
 
             optimizer.zero_grad()
-            output = model(seed_tensor).squeeze(1)
+            output = model(input_tensor).squeeze(1)
+            output = output[-len(target_tensor):]  # Align shapes before loss
             loss = loss_fn(output, target_tensor)
             loss.backward()
             optimizer.step()
@@ -167,6 +173,7 @@ if __name__ == "__main__":
     parser.add_argument("--save_dir", type=str, default=SAVE_DIR, help="Checkpoint save directory")
     parser.add_argument("--epochs", type=int, default=EPOCHS, help="Number of training epochs")
     parser.add_argument("--checkpoint_interval", type=int, default=CHECKPOINT_INTERVAL, help="Checkpoint save interval")
+    parser.add_argument("--seed_length", type=int, default=SEED_LENGTH, help="Number of tokens in the seed phrase")
     parser.add_argument("--evaluate", type=str, default=None, help="Path to checkpoint file to evaluate only")
 
     args = parser.parse_args()
@@ -177,6 +184,7 @@ if __name__ == "__main__":
     SAVE_DIR = args.save_dir
     EPOCHS = args.epochs
     CHECKPOINT_INTERVAL = args.checkpoint_interval
+    SEED_LENGTH = args.seed_length
 
     if args.evaluate:
         evaluate_checkpoint(args.evaluate)
