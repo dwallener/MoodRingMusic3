@@ -20,6 +20,7 @@ SAVE_DIR = "checkpoints"
 EPOCHS = 500
 CHECKPOINT_INTERVAL = 100
 SEED_LENGTH = 4
+BATCH_SIZE = 1
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {DEVICE}")
 
@@ -101,31 +102,45 @@ def train():
     optimizer = optim.Adam(model.parameters(), lr=1e-3)
     loss_fn = nn.CrossEntropyLoss()
 
-    for epoch in range(1, EPOCHS + 1):
-        model.train()
-        total_loss = 0
-        for seed, target in tqdm(train_data):
-            # Prepare inputs and targets correctly
-            input_seq = seed + target[:-1]
-            target_seq = target
+for epoch in range(1, EPOCHS + 1):
+    model.train()
+    total_loss = 0
+    batch_inputs, batch_targets = [], []
 
-            input_tensor = torch.tensor([INTERVAL_VOCAB.index(i) for i in input_seq], dtype=torch.long).unsqueeze(1).to(DEVICE)
-            target_tensor = torch.tensor([INTERVAL_VOCAB.index(i) for i in target_seq], dtype=torch.long).to(DEVICE)
+    for idx, (seed, target) in enumerate(tqdm(train_data)):
+        input_seq = seed + target[:-1]
+        target_seq = target
+
+        input_tensor = torch.tensor(
+            [INTERVAL_VOCAB.index(i) for i in input_seq], dtype=torch.long
+        ).unsqueeze(0)  # Add batch dim
+        target_tensor = torch.tensor(
+            [INTERVAL_VOCAB.index(i) for i in target_seq], dtype=torch.long
+        ).unsqueeze(0)  # Add batch dim
+
+        batch_inputs.append(input_tensor)
+        batch_targets.append(target_tensor)
+
+        if len(batch_inputs) == BATCH_SIZE or idx == len(train_data) - 1:
+            batch_inputs_tensor = torch.cat(batch_inputs).to(DEVICE)  # Shape: (BATCH_SIZE, seq_len)
+            batch_targets_tensor = torch.cat(batch_targets).to(DEVICE)
 
             optimizer.zero_grad()
-            output = model(input_tensor).squeeze(1)
-            output = output[-len(target_tensor):]  # Align shapes before loss
-            loss = loss_fn(output, target_tensor)
+            output = model(batch_inputs_tensor)
+            output = output[:, -batch_targets_tensor.size(1):, :]  # Align last N predictions
+            loss = loss_fn(output.reshape(-1, VOCAB_SIZE), batch_targets_tensor.reshape(-1))
             loss.backward()
             optimizer.step()
+
             total_loss += loss.item()
+            batch_inputs, batch_targets = [], []
 
-        print(f"Epoch {epoch} Loss: {total_loss/len(train_data):.4f}")
+    print(f"Epoch {epoch} Loss: {total_loss/len(train_data):.4f}")
 
-        if epoch % CHECKPOINT_INTERVAL == 0:
-            os.makedirs(SAVE_DIR, exist_ok=True)
-            checkpoint_path = os.path.join(SAVE_DIR, f"{COMPOSER}_epoch{epoch}.pt")
-            torch.save(model.state_dict(), checkpoint_path)
+    if epoch % CHECKPOINT_INTERVAL == 0:
+        os.makedirs(SAVE_DIR, exist_ok=True)
+        checkpoint_path = os.path.join(SAVE_DIR, f"{COMPOSER}_epoch{epoch}.pt")
+        torch.save(model.state_dict(), checkpoint_path)
 
     validate(model, val_data)
 
@@ -176,6 +191,7 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoint_interval", type=int, default=CHECKPOINT_INTERVAL, help="Checkpoint save interval")
     parser.add_argument("--seed_length", type=int, default=SEED_LENGTH, help="Number of tokens in the seed phrase")
     parser.add_argument("--evaluate", type=str, default=None, help="Path to checkpoint file to evaluate only")
+    parser.add_argument("--batch_size", type=int, default=BATCH_SIZE, help="Training batch size")
 
     args = parser.parse_args()
 
@@ -186,6 +202,7 @@ if __name__ == "__main__":
     EPOCHS = args.epochs
     CHECKPOINT_INTERVAL = args.checkpoint_interval
     SEED_LENGTH = args.seed_length
+    BATCH_SIZE = args.batch_size
 
     if args.evaluate:
         evaluate_checkpoint(args.evaluate)
