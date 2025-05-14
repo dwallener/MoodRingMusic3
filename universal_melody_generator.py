@@ -60,22 +60,29 @@ class UniversalMelodyGenerator:
         self.current_key = None
 
 
-    def select_bpm(self, mood):
+    def select_bpm(self, mood, time_of_day):
         bpm_ranges = {
-            "Focus": (90, 110), "Relax": (70, 90), "Energy": (110, 140), "Sleep": (40, 60),
-            "Creative Flow": (90, 110), "Calm Confidence": (80, 100),
-            "Romantic": (50, 70), "Reflective": (50, 70)
+            "Focus": {"Morning": (90, 110), "Midday": (100, 120), "Evening": (80, 100), "Night": (60, 80)},
+            "Relax": {"Morning": (70, 90), "Midday": (80, 100), "Evening": (60, 80), "Night": (40, 60)},
+            "Energy": {"Morning": (100, 120), "Midday": (120, 140), "Evening": (110, 130), "Night": (90, 110)},
+            "Sleep": {"Evening": (50, 70), "Night": (40, 60)},
+            "Creative Flow": {"Morning": (90, 110), "Midday": (100, 120), "Evening": (80, 100)},
+            "Calm Confidence": {"Morning": (80, 100), "Midday": (90, 110), "Evening": (70, 90)},
+            "Romantic": {"Evening": (60, 80), "Night": (50, 70)},
+            "Reflective": {"Evening": (60, 80), "Night": (50, 70)}
         }
-        min_bpm, max_bpm = bpm_ranges.get(mood, (80, 100))
+
+        # Fallback to a generic range if not defined
+        mood_ranges = bpm_ranges.get(mood, {})
+        min_bpm, max_bpm = mood_ranges.get(time_of_day, (80, 100))
         mid_bpm = (min_bpm + max_bpm) / 2
 
-        # Gaussian bias towards the middle
-        bpm = int(random.gauss(mu=mid_bpm, sigma=(max_bpm - min_bpm) / 6))  # 99.7% values within range
-        print(f"[DEBUG] Selected BPM for {mood}: {bpm}")
-        return max(min_bpm, min(bpm, max_bpm))
+        bpm = int(random.gauss(mu=mid_bpm, sigma=(max_bpm - min_bpm) / 6))
+        bpm = max(min_bpm, min(bpm, max_bpm))
+        return bpm
 
 
-    def generate_full_song(self, goal='Focus', genre='Classical'):
+    def generate_full_song(self, goal='Focus', genre='Classical', time_of_day='Morning'):
         structure = SONG_STRUCTURES.get(genre, SONG_STRUCTURES["Pop"])
         full_midi = MidiFile()
         tracks = [MidiTrack() for _ in range(4)]
@@ -95,7 +102,7 @@ class UniversalMelodyGenerator:
                 self.current_key = self.pick_new_key(goal)
 
             mid, tempo, key, mode, progression = self.generate_section(
-                goal, genre, section, section_index=idx, total_sections=total_sections
+                goal, genre, section, section_index=idx, total_sections=total_sections, time_of_day=time_of_day
             )
             for i, track in enumerate(mid.tracks):
                 for msg in track:
@@ -104,9 +111,9 @@ class UniversalMelodyGenerator:
         return full_midi, structure, tempo, key, mode, progression
 
 
-    def generate_section(self, goal, genre, section, section_index=0, total_sections=1):
+    def generate_section(self, goal, genre, section, section_index=0, total_sections=1, time_of_day="Morning"):
         energy_factor = section_index / max(1, total_sections - 1)
-        tempo = self.select_bpm(goal)
+        tempo = self.select_bpm(goal, time_of_day)
         #base_tempo = random.randint(60, 140)
         #energy_tempo_boost = int(energy_factor * 30)
         #tempo_mod = {"Intro": -10, "Verse": 0, "Chorus": +10, "Bridge": +5, "Outro": -5}.get(section, 0)

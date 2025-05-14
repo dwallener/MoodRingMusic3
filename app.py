@@ -14,6 +14,7 @@ st.subheader("Generate and Play Music by Mood")
 mood = st.selectbox("Select Mood", list(SCALE_MAP.keys()))
 st.subheader("Select Genre")
 genre = st.radio("", ["Classical", "Jazz", "Pop", "Dance"], horizontal=True)
+time_of_day = st.radio("Select Time of Day", ["Morning", "Midday", "Evening", "Night"], horizontal=True)
 generation_type = st.radio("Select Generation Type", ["Full Song"], horizontal=True)
 continuous = st.toggle("Continuous Playback", value=False)
 loop_duration_sec = st.slider("Loop Duration (seconds)", 15, 300, 60, 5)
@@ -23,7 +24,7 @@ if 'audio_file_path' not in st.session_state:
 
 def generate_and_convert(fade_out_ms=2000):
     generator = UniversalMelodyGenerator()
-    midi_file, structure, tempo, key, mode, progression = generator.generate_full_song(goal=mood, genre=genre)
+    midi_file, structure, tempo, key, mode, progression = generator.generate_full_song(goal=mood, genre=genre, time_of_day=time_of_day)
 
     tmp_midi = tempfile.NamedTemporaryFile(delete=False, suffix='.mid')
     tmp_wav = tempfile.NamedTemporaryFile(delete=False, suffix='.wav')
