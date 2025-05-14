@@ -17,3 +17,13 @@ python composer_melody_trainer.py \
     --composer Chopin \
     --evaluate checkpoints/Chopin_epoch500.pt
 ```
+
+Evaluate a checkpoint without triggering a training event:
+
+```
+python composer_melody_trainer.py \
+    --meta_csv /path/to/maestro_midi_metadata.csv \
+    --midi_base /path/to/maestro_midi/ \
+    --composer Chopin \
+    --evaluate checkpoints/Chopin_epoch500.pt
+```
