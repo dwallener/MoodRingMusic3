@@ -102,6 +102,9 @@ def train():
     optimizer = optim.Adam(model.parameters(), lr=1e-3)
     loss_fn = nn.CrossEntropyLoss()
 
+    # set up for AMP (mixed precision)
+    scaler = torch.cuda.amp.GradScaler()
+
     for epoch in range(1, EPOCHS + 1):
         model.train()
         total_loss = 0
@@ -126,11 +129,15 @@ def train():
                 batch_targets_tensor = torch.cat(batch_targets).to(DEVICE)
 
                 optimizer.zero_grad()
-                output = model(batch_inputs_tensor)
-                output = output[:, -batch_targets_tensor.size(1):, :]  # Align last N predictions
-                loss = loss_fn(output.reshape(-1, VOCAB_SIZE), batch_targets_tensor.reshape(-1))
-                loss.backward()
-                optimizer.step()
+                with torch.cuda.amp.autocast():
+                    output = model(batch_inputs_tensor)
+                    output = output[:, -batch_targets_tensor.size(1):, :]  # Align last N predictions
+                    loss = loss_fn(output.reshape(-1, VOCAB_SIZE), batch_targets_tensor.reshape(-1))
+                #loss.backward()
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
+                #optimizer.step()
 
                 total_loss += loss.item()
                 batch_inputs, batch_targets = [], []
