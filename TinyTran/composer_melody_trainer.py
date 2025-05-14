@@ -102,47 +102,47 @@ def train():
     optimizer = optim.Adam(model.parameters(), lr=1e-3)
     loss_fn = nn.CrossEntropyLoss()
 
-for epoch in range(1, EPOCHS + 1):
-    model.train()
-    total_loss = 0
-    batch_inputs, batch_targets = [], []
+    for epoch in range(1, EPOCHS + 1):
+        model.train()
+        total_loss = 0
+        batch_inputs, batch_targets = [], []
 
-    for idx, (seed, target) in enumerate(tqdm(train_data)):
-        input_seq = seed + target[:-1]
-        target_seq = target
+        for idx, (seed, target) in enumerate(tqdm(train_data)):
+            input_seq = seed + target[:-1]
+            target_seq = target
 
-        input_tensor = torch.tensor(
-            [INTERVAL_VOCAB.index(i) for i in input_seq], dtype=torch.long
-        ).unsqueeze(0)  # Add batch dim
-        target_tensor = torch.tensor(
-            [INTERVAL_VOCAB.index(i) for i in target_seq], dtype=torch.long
-        ).unsqueeze(0)  # Add batch dim
+            input_tensor = torch.tensor(
+                [INTERVAL_VOCAB.index(i) for i in input_seq], dtype=torch.long
+            ).unsqueeze(0)  # Add batch dim
+            target_tensor = torch.tensor(
+                [INTERVAL_VOCAB.index(i) for i in target_seq], dtype=torch.long
+            ).unsqueeze(0)  # Add batch dim
 
-        batch_inputs.append(input_tensor)
-        batch_targets.append(target_tensor)
+            batch_inputs.append(input_tensor)
+            batch_targets.append(target_tensor)
 
-        if len(batch_inputs) == BATCH_SIZE or idx == len(train_data) - 1:
-            batch_inputs_tensor = torch.cat(batch_inputs).to(DEVICE)  # Shape: (BATCH_SIZE, seq_len)
-            batch_targets_tensor = torch.cat(batch_targets).to(DEVICE)
+            if len(batch_inputs) == BATCH_SIZE or idx == len(train_data) - 1:
+                batch_inputs_tensor = torch.cat(batch_inputs).to(DEVICE)  # Shape: (BATCH_SIZE, seq_len)
+                batch_targets_tensor = torch.cat(batch_targets).to(DEVICE)
 
-            optimizer.zero_grad()
-            output = model(batch_inputs_tensor)
-            output = output[:, -batch_targets_tensor.size(1):, :]  # Align last N predictions
-            loss = loss_fn(output.reshape(-1, VOCAB_SIZE), batch_targets_tensor.reshape(-1))
-            loss.backward()
-            optimizer.step()
+                optimizer.zero_grad()
+                output = model(batch_inputs_tensor)
+                output = output[:, -batch_targets_tensor.size(1):, :]  # Align last N predictions
+                loss = loss_fn(output.reshape(-1, VOCAB_SIZE), batch_targets_tensor.reshape(-1))
+                loss.backward()
+                optimizer.step()
 
-            total_loss += loss.item()
-            batch_inputs, batch_targets = [], []
+                total_loss += loss.item()
+                batch_inputs, batch_targets = [], []
 
-    print(f"Epoch {epoch} Loss: {total_loss/len(train_data):.4f}")
+        print(f"Epoch {epoch} Loss: {total_loss/len(train_data):.4f}")
 
-    if epoch % CHECKPOINT_INTERVAL == 0:
-        os.makedirs(SAVE_DIR, exist_ok=True)
-        checkpoint_path = os.path.join(SAVE_DIR, f"{COMPOSER}_epoch{epoch}.pt")
-        torch.save(model.state_dict(), checkpoint_path)
+        if epoch % CHECKPOINT_INTERVAL == 0:
+            os.makedirs(SAVE_DIR, exist_ok=True)
+            checkpoint_path = os.path.join(SAVE_DIR, f"{COMPOSER}_epoch{epoch}.pt")
+            torch.save(model.state_dict(), checkpoint_path)
 
-    validate(model, val_data)
+        validate(model, val_data)
 
 # --------------------
 # VALIDATION LOOP
