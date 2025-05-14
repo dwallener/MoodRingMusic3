@@ -2,7 +2,6 @@ import mido
 from mido import Message, MidiFile, MidiTrack
 import random
 
-# 🎵 Instrument Assignments by Genre (General MIDI Program Numbers)
 GENRE_INSTRUMENTS = {
     "Classical": {"melody": 40, "chords_primary": 41, "chords_secondary": 42, "bass": 43},
     "Jazz": {"melody": 56, "chords_primary": 0, "chords_secondary": 24, "bass": 33},
@@ -43,11 +42,11 @@ SONG_STRUCTURES = {
     "Jazz": ["Head", "Solo", "Solo", "Head", "Outro"]
 }
 
-
 class UniversalMelodyGenerator:
     def __init__(self, base_note=60):
         self.base_note = base_note
-        self.motif = None  # Store motif here
+        self.motif = None
+        self.current_key = None
 
     def generate_full_song(self, goal='Focus', genre='Classical'):
         structure = SONG_STRUCTURES.get(genre, SONG_STRUCTURES["Pop"])
@@ -61,7 +60,13 @@ class UniversalMelodyGenerator:
             tracks[idx].append(Message('program_change', program=instrument_set[track_name], time=0, channel=channel))
 
         total_sections = len(structure)
+        self.current_key = random.choice(KEY_MAP[goal])
+
         for idx, section in enumerate(structure):
+            # Introduce key change at Bridge or optionally at Chorus
+            if section in ["Bridge", "Chorus"] and random.random() < 0.5:
+                self.current_key = self.pick_new_key(goal)
+
             mid, tempo, key, mode, progression = self.generate_section(
                 goal, genre, section, section_index=idx, total_sections=total_sections
             )
@@ -69,7 +74,7 @@ class UniversalMelodyGenerator:
                 for msg in track:
                     tracks[i].append(msg)
 
-        return full_midi, structure
+        return full_midi, structure, tempo, key, mode, progression
 
     def generate_section(self, goal, genre, section, section_index=0, total_sections=1):
         energy_factor = section_index / max(1, total_sections - 1)
@@ -82,11 +87,8 @@ class UniversalMelodyGenerator:
         note_count = int(base_length + energy_factor * 8)
 
         scale_choice = random.choice(SCALE_MAP[goal])
-        key_choice = random.choice(KEY_MAP[goal])
-        progression_choice = random.choice(CHORD_PROGRESSIONS[goal])
-
         mode = scale_choice.lower()
-        key_offset = self.note_to_midi_offset(key_choice)
+        key_offset = self.note_to_midi_offset(self.current_key)
         scale = SCALES[mode]
 
         mid = MidiFile()
@@ -98,7 +100,7 @@ class UniversalMelodyGenerator:
         for t in tracks:
             t.append(mido.MetaMessage('set_tempo', tempo=tempo_microsec))
 
-        # Generate or reuse motif
+        # Motif handling
         if section in ["Intro", "Verse"] and self.motif is None:
             self.motif = self.create_motif(scale)
             motif_sequence = self.motif
@@ -118,24 +120,31 @@ class UniversalMelodyGenerator:
             tracks[0].append(Message('note_on', note=scale_note, velocity=velocity, time=0, channel=0))
             tracks[0].append(Message('note_off', note=scale_note, velocity=velocity, time=ticks, channel=0))
 
+        progression_choice = random.choice(CHORD_PROGRESSIONS[goal])
         self.add_chords(tracks[1:], progression_choice, key_offset, tempo, mid.ticks_per_beat, sum(rhythm))
-        return mid, tempo, key_choice, mode, progression_choice
 
+        return mid, tempo, self.current_key, mode, progression_choice
+        
     def create_motif(self, scale, length=4):
-        """Create a short, recognizable motif (melodic contour)."""
+        """Create a short, memorable motif."""
         return self.random_contour(length=length)
 
     def transform_motif(self, motif, section):
-        """Develop motif based on section type."""
+        """Develop the motif based on section type."""
         new_motif = motif.copy()
         if section == "Chorus":
-            return [n + random.choice([-2, 2, 4]) for n in new_motif]  # Transpose
+            return [n + random.choice([-2, 2, 4]) for n in new_motif]  # Transposition
         elif section == "Bridge":
-            return [-n for n in reversed(new_motif)]  # Invert and reverse
+            return [-n for n in reversed(new_motif)]  # Inversion and reversal
         elif section == "Outro":
-            return [n // 2 for n in new_motif]  # Compress intervals
+            return [n // 2 for n in new_motif]  # Interval compression
         return new_motif
 
+    def pick_new_key(self, goal):
+        """Randomly pick a new key from the allowed keys for the current mood, avoiding the current key if possible."""
+        possible_keys = [k for k in KEY_MAP[goal] if k != self.current_key]
+        return random.choice(possible_keys) if possible_keys else self.current_key
+        
     def random_contour(self, length=8, max_interval=5):
         return [random.randint(-max_interval, max_interval) for _ in range(length)]
 
