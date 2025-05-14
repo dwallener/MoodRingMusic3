@@ -9,4 +9,11 @@ Maestro v3 is being used to train the TinyTran for classical generation. Three s
 - Complete training and validation loop
 - Generator Class to hook into the main generation code
 
-- 
+Training script can be run something like this...
+```
+python composer_melody_trainer.py \
+    --meta_csv /path/to/maestro_midi_metadata.csv \
+    --midi_base /path/to/maestro_midi/ \
+    --composer Chopin \
+    --evaluate checkpoints/Chopin_epoch500.pt
+```
