@@ -4,13 +4,17 @@ import mido
 import fluidsynth
 import tempfile
 import os
+import threading
 
 SOUNDFONT_PATH = 'soundfonts/FluidR3_GM.sf2'
 
 fs = fluidsynth.Synth()
-fs.start(driver="coreaudio")  # Use 'alsa' for Linux, 'dsound' for Windows
+fs.start(driver="coreaudio")  # Adjust if using Windows or Linux
 sfid = fs.sfload(SOUNDFONT_PATH)
 fs.program_select(0, sfid, 0, 0)
+
+# Global event for stopping playback
+playback_event = threading.Event()
 
 st.title("🎵 Universal Melody Generator")
 st.subheader("Generate and Play Music by Mood")
@@ -20,7 +24,6 @@ st.subheader("Select Genre")
 genre = st.radio("", ["Classical", "Jazz", "Pop", "Dance"], horizontal=True)
 
 generation_type = st.radio("Select Generation Type", ["Loop", "Full Song"], horizontal=True)
-
 generate_button = st.button("Generate MIDI")
 
 if 'midi_file_path' not in st.session_state:
@@ -53,9 +56,14 @@ if generate_button:
 if st.session_state['midi_file_path']:
     st.audio(st.session_state['midi_file_path'], format='audio/midi')
 
-    if st.button("▶️ Play"):
-        mid = mido.MidiFile(st.session_state['midi_file_path'])
+    def play_midi(path):
+        print(f"Starting playback thread for {path}")
+        mid = mido.MidiFile(path)
+        playback_event.clear()
         for msg in mid.play():
+            if playback_event.is_set():
+                fs.all_notes_off(0)
+                break
             if msg.type == 'program_change':
                 fs.program_change(msg.channel, msg.program)
             elif msg.type == 'note_on':
@@ -64,7 +72,16 @@ if st.session_state['midi_file_path']:
                 fs.noteoff(msg.channel, msg.note)
         fs.all_notes_off(0)
 
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("▶️ Play"):
+            threading.Thread(target=play_midi, args=(st.session_state['midi_file_path'],), daemon=True).start()
+
+    with col2:
+        if st.button("⏹️ Stop Playing"):
+            playback_event.set()
+
     if st.button("🗑️ Clear"):
         os.unlink(st.session_state['midi_file_path'])
         st.session_state['midi_file_path'] = None
-        st.experimental_rerun()
+        st.rerun()
