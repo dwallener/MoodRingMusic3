@@ -2,6 +2,17 @@ import mido
 from mido import Message, MidiFile, MidiTrack
 import random
 
+BPM_RANGES = {
+    "Focus": {"Morning": (90, 110), "Midday": (100, 120), "Evening": (80, 100), "Night": (60, 80)},
+    "Relax": {"Morning": (70, 90), "Midday": (80, 100), "Evening": (60, 80), "Night": (40, 60)},
+    "Energy": {"Morning": (100, 120), "Midday": (120, 140), "Evening": (110, 130), "Night": (90, 110)},
+    "Sleep": {"Evening": (50, 70), "Night": (40, 60)},
+    "Creative Flow": {"Morning": (90, 110), "Midday": (100, 120), "Evening": (80, 100)},
+    "Calm Confidence": {"Morning": (80, 100), "Midday": (90, 110), "Evening": (70, 90)},
+    "Romantic": {"Evening": (60, 80), "Night": (50, 70)},
+    "Reflective": {"Evening": (60, 80), "Night": (50, 70)}
+}
+
 GENRE_INSTRUMENTS = {
     "Classical": {"melody": 40, "chords_primary": 41, "chords_secondary": 42, "bass": 43},
     "Jazz": {"melody": 56, "chords_primary": 0, "chords_secondary": 24, "bass": 33},
@@ -48,6 +59,22 @@ class UniversalMelodyGenerator:
         self.motif = None
         self.current_key = None
 
+
+    def select_bpm(self, mood):
+        bpm_ranges = {
+            "Focus": (90, 110), "Relax": (70, 90), "Energy": (110, 140), "Sleep": (40, 60),
+            "Creative Flow": (90, 110), "Calm Confidence": (80, 100),
+            "Romantic": (50, 70), "Reflective": (50, 70)
+        }
+        min_bpm, max_bpm = bpm_ranges.get(mood, (80, 100))
+        mid_bpm = (min_bpm + max_bpm) / 2
+
+        # Gaussian bias towards the middle
+        bpm = int(random.gauss(mu=mid_bpm, sigma=(max_bpm - min_bpm) / 6))  # 99.7% values within range
+        print(f"[DEBUG] Selected BPM for {mood}: {bpm}")
+        return max(min_bpm, min(bpm, max_bpm))
+
+
     def generate_full_song(self, goal='Focus', genre='Classical'):
         structure = SONG_STRUCTURES.get(genre, SONG_STRUCTURES["Pop"])
         full_midi = MidiFile()
@@ -76,12 +103,14 @@ class UniversalMelodyGenerator:
 
         return full_midi, structure, tempo, key, mode, progression
 
+
     def generate_section(self, goal, genre, section, section_index=0, total_sections=1):
         energy_factor = section_index / max(1, total_sections - 1)
-        base_tempo = random.randint(60, 140)
-        energy_tempo_boost = int(energy_factor * 30)
-        tempo_mod = {"Intro": -10, "Verse": 0, "Chorus": +10, "Bridge": +5, "Outro": -5}.get(section, 0)
-        tempo = max(60, base_tempo + tempo_mod + energy_tempo_boost)
+        tempo = self.select_bpm(goal)
+        #base_tempo = random.randint(60, 140)
+        #energy_tempo_boost = int(energy_factor * 30)
+        #tempo_mod = {"Intro": -10, "Verse": 0, "Chorus": +10, "Bridge": +5, "Outro": -5}.get(section, 0)
+        #tempo = max(60, base_tempo + tempo_mod + energy_tempo_boost)
 
         base_length = 8
         note_count = int(base_length + energy_factor * 8)
@@ -116,7 +145,7 @@ class UniversalMelodyGenerator:
             current_note += interval
             scale_note = self.snap_to_scale(current_note, scale)
             ticks = self.beats_to_ticks(duration, tempo, mid.ticks_per_beat)
-            velocity = int(60 + energy_factor * 40)
+            velocity = min((int(60 + energy_factor * 40)), 127)
             tracks[0].append(Message('note_on', note=scale_note, velocity=velocity, time=0, channel=0))
             tracks[0].append(Message('note_off', note=scale_note, velocity=velocity, time=ticks, channel=0))
 
@@ -161,15 +190,15 @@ class UniversalMelodyGenerator:
             bass_note = chord_notes[0] - 24
 
             for note in chord_notes:
-                tracks[0].append(Message('note_on', note=note, velocity=70, time=0, channel=1))
+                tracks[0].append(Message('note_on', note=note, velocity=60, time=0, channel=1))
             for note in [n + 12 for n in chord_notes]:
-                tracks[1].append(Message('note_on', note=note, velocity=50, time=0, channel=2))
+                tracks[1].append(Message('note_on', note=note, velocity=60, time=0, channel=2))
             tracks[2].append(Message('note_on', note=bass_note, velocity=80, time=0, channel=3))
 
             for note in chord_notes:
-                tracks[0].append(Message('note_off', note=note, velocity=70, time=chord_ticks, channel=1))
+                tracks[0].append(Message('note_off', note=note, velocity=60, time=chord_ticks, channel=1))
             for note in [n + 12 for n in chord_notes]:
-                tracks[1].append(Message('note_off', note=note, velocity=50, time=chord_ticks, channel=2))
+                tracks[1].append(Message('note_off', note=note, velocity=60, time=chord_ticks, channel=2))
             tracks[2].append(Message('note_off', note=bass_note, velocity=80, time=chord_ticks, channel=3))
 
     def resolve_progression(self, progression):
