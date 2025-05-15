@@ -30,9 +30,59 @@ INTERVAL_VOCAB = [i for i in range(INTERVAL_RANGE[0], INTERVAL_RANGE[1] + 1)]
 INTERVAL_PAD = len(INTERVAL_VOCAB)
 VOCAB_SIZE = len(INTERVAL_VOCAB) + 1
 
+# Example Duration Vocabulary (in beats)
+DURATION_VOCAB = [0.25, 0.5, 0.75, 1.0]  # Eighth, quarter, dotted quarter, half notes
+DURATION_VOCAB_SIZE = len(DURATION_VOCAB)
+
+# Example Register Vocabulary
+REGISTER_VOCAB = ['low', 'mid', 'high']
+REGISTER_VOCAB_SIZE = len(REGISTER_VOCAB)
+
 # --------------------
 # DATA PREPARATION
 # --------------------
+
+def extract_melody_features(midi_path):
+    try:
+        midi = pretty_midi.PrettyMIDI(midi_path)
+        melody_notes = []
+        for instrument in midi.instruments:
+            if instrument.is_drum:
+                continue
+            for note in instrument.notes:
+                melody_notes.append(note)
+
+        melody_notes.sort(key=lambda n: n.start)
+        intervals, durations, registers = [], [], []
+        last_pitch = None
+
+        for note in melody_notes:
+            if last_pitch is not None:
+                interval = note.pitch - last_pitch
+                interval = max(INTERVAL_RANGE[0], min(INTERVAL_RANGE[1], interval))
+                intervals.append(interval)
+            last_pitch = note.pitch
+
+            durations.append(quantize_duration(note.end - note.start))
+            registers.append(classify_register(note.pitch))
+
+        return intervals, durations, registers
+    except:
+        return [], [], []
+
+def quantize_duration(duration):
+    # Example: Quantize durations to nearest in [0.25, 0.5, 0.75, 1.0]
+    quantized = min(DURATION_VOCAB, key=lambda x: abs(x - duration))
+    return quantized
+
+def classify_register(pitch):
+    # Example: Map pitch to low, mid, high register classes
+    if pitch < 60:
+        return 'low'
+    elif pitch < 72:
+        return 'mid'
+    else:
+        return 'high'
 
 def extract_melody_intervals(midi_path):
     try:
@@ -57,17 +107,23 @@ def extract_melody_intervals(midi_path):
     except:
         return []
 
+
 def build_dataset():
     meta = pd.read_csv(META_CSV)
     files = meta[meta['composer'].str.contains(COMPOSER, na=False)]['midi_filename'].tolist()
     sequences = []
+
     for fname in tqdm(files):
-        intervals = extract_melody_intervals(os.path.join(MIDI_BASE, fname))
+        intervals, durations, registers = extract_melody_features(os.path.join(MIDI_BASE, fname))
+
         if len(intervals) >= SEED_LENGTH + 32:
             for i in range(len(intervals) - (SEED_LENGTH + 32)):
                 seed = intervals[i:i+SEED_LENGTH]
-                target = intervals[i+SEED_LENGTH:i+SEED_LENGTH+32]
-                sequences.append((seed, target))
+                target_intervals = intervals[i+SEED_LENGTH:i+SEED_LENGTH+32]
+                target_durations = durations[i+SEED_LENGTH:i+SEED_LENGTH+32]
+                target_registers = registers[i+SEED_LENGTH:i+SEED_LENGTH+32]
+                sequences.append((seed, target_intervals, target_durations, target_registers))
+
     return sequences
 
 # --------------------
@@ -78,21 +134,24 @@ class TinyMelodyTransformer(nn.Module):
     def __init__(self):
         super().__init__()
         self.embed = nn.Embedding(VOCAB_SIZE, 128)
-        encoder_layer = nn.TransformerEncoderLayer(d_model=128, nhead=4)
+        encoder_layer = nn.TransformerEncoderLayer(d_model=128, nhead=4, batch_first=True)
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=2)
-        self.fc_out = nn.Linear(128, VOCAB_SIZE)
+
+        self.interval_head = nn.Linear(128, VOCAB_SIZE)             # Predict Intervals
+        self.duration_head = nn.Linear(128, DURATION_VOCAB_SIZE)    # Predict Durations
+        self.register_head = nn.Linear(128, REGISTER_VOCAB_SIZE)    # Predict Register Classes
 
     def forward(self, x):
         x = self.embed(x)
         x = self.transformer(x)
-        return self.fc_out(x)
+        return self.interval_head(x), self.duration_head(x), self.register_head(x)
 
 # --------------------
 # TRAINING LOOP
 # --------------------
 
 def train():
-    sequences = build_dataset()
+    sequences = build_dataset()  # Should now include (seed, target_intervals, target_durations, target_registers)
     random.shuffle(sequences)
     split = int(0.8 * len(sequences))
     train_data = sequences[:split]
@@ -100,47 +159,63 @@ def train():
 
     model = TinyMelodyTransformer().to(DEVICE)
     optimizer = optim.Adam(model.parameters(), lr=1e-3)
-    loss_fn = nn.CrossEntropyLoss()
+    loss_fn_interval = nn.CrossEntropyLoss()
+    loss_fn_duration = nn.CrossEntropyLoss()
+    loss_fn_register = nn.CrossEntropyLoss()
 
-    # set up for AMP (mixed precision)
     scaler = torch.cuda.amp.GradScaler()
 
     for epoch in range(1, EPOCHS + 1):
         model.train()
         total_loss = 0
-        batch_inputs, batch_targets = [], []
+        batch_inputs, batch_intervals, batch_durations, batch_registers = [], [], [], []
 
-        for idx, (seed, target) in enumerate(tqdm(train_data)):
-            input_seq = seed + target[:-1]
-            target_seq = target
+        for idx, (seed, target_intervals, target_durations, target_registers) in enumerate(tqdm(train_data)):
+            input_seq = seed + target_intervals[:-1]
 
             input_tensor = torch.tensor(
                 [INTERVAL_VOCAB.index(i) for i in input_seq], dtype=torch.long
-            ).unsqueeze(0)  # Add batch dim
-            target_tensor = torch.tensor(
-                [INTERVAL_VOCAB.index(i) for i in target_seq], dtype=torch.long
-            ).unsqueeze(0)  # Add batch dim
+            ).unsqueeze(0)
+            interval_tensor = torch.tensor(
+                [INTERVAL_VOCAB.index(i) for i in target_intervals], dtype=torch.long
+            ).unsqueeze(0)
+            duration_tensor = torch.tensor(
+                [DURATION_VOCAB.index(i) for i in target_durations], dtype=torch.long
+            ).unsqueeze(0)
+            register_tensor = torch.tensor(
+                [REGISTER_VOCAB.index(i) for i in target_registers], dtype=torch.long
+            ).unsqueeze(0)
 
             batch_inputs.append(input_tensor)
-            batch_targets.append(target_tensor)
+            batch_intervals.append(interval_tensor)
+            batch_durations.append(duration_tensor)
+            batch_registers.append(register_tensor)
 
             if len(batch_inputs) == BATCH_SIZE or idx == len(train_data) - 1:
-                batch_inputs_tensor = torch.cat(batch_inputs).to(DEVICE)  # Shape: (BATCH_SIZE, seq_len)
-                batch_targets_tensor = torch.cat(batch_targets).to(DEVICE)
+                batch_inputs_tensor = torch.cat(batch_inputs).to(DEVICE)
+                batch_intervals_tensor = torch.cat(batch_intervals).to(DEVICE)
+                batch_durations_tensor = torch.cat(batch_durations).to(DEVICE)
+                batch_registers_tensor = torch.cat(batch_registers).to(DEVICE)
 
                 optimizer.zero_grad()
                 with torch.cuda.amp.autocast():
-                    output = model(batch_inputs_tensor)
-                    output = output[:, -batch_targets_tensor.size(1):, :]  # Align last N predictions
-                    loss = loss_fn(output.reshape(-1, VOCAB_SIZE), batch_targets_tensor.reshape(-1))
-                #loss.backward()
-                scaler.scale(loss).backward()
+                    pred_intervals, pred_durations, pred_registers = model(batch_inputs_tensor)
+                    pred_intervals = pred_intervals[:, -batch_intervals_tensor.size(1):, :]
+                    pred_durations = pred_durations[:, -batch_durations_tensor.size(1):, :]
+                    pred_registers = pred_registers[:, -batch_registers_tensor.size(1):, :]
+
+                    loss_interval = loss_fn_interval(pred_intervals.reshape(-1, VOCAB_SIZE), batch_intervals_tensor.reshape(-1))
+                    loss_duration = loss_fn_duration(pred_durations.reshape(-1, DURATION_VOCAB_SIZE), batch_durations_tensor.reshape(-1))
+                    loss_register = loss_fn_register(pred_registers.reshape(-1, REGISTER_VOCAB_SIZE), batch_registers_tensor.reshape(-1))
+
+                    total_batch_loss = loss_interval + loss_duration + loss_register
+
+                scaler.scale(total_batch_loss).backward()
                 scaler.step(optimizer)
                 scaler.update()
-                #optimizer.step()
 
-                total_loss += loss.item()
-                batch_inputs, batch_targets = [], []
+                total_loss += total_batch_loss.item()
+                batch_inputs, batch_intervals, batch_durations, batch_registers = [], [], [], []
 
         print(f"Epoch {epoch} Loss: {total_loss/len(train_data):.4f}")
 
@@ -149,7 +224,7 @@ def train():
             checkpoint_path = os.path.join(SAVE_DIR, f"{COMPOSER}_epoch{epoch}.pt")
             torch.save(model.state_dict(), checkpoint_path)
 
-        validate(model, val_data)
+    validate(model, val_data)
 
 # --------------------
 # VALIDATION LOOP

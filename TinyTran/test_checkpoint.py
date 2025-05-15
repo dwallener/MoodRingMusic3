@@ -1,12 +1,12 @@
-import random
 import torch
 import pretty_midi
 import subprocess
+import random
 from composer_melody_trainer import TinyMelodyTransformer, INTERVAL_VOCAB, DEVICE, build_dataset
 
-CHECKPOINT_PATH = "checkpoints/Mozart_epoch100.pt"  # Update as needed
+CHECKPOINT_PATH = "checkpoints/Mozart_epoch400.pt"  # Adjust path as needed
 OUTPUT_MIDI = "generated_melody.mid"
-SOUNDFONT_PATH = "/path/to/FluidR3_GM.sf2"  # Update with correct SoundFont path
+SOUNDFONT_PATH = "../soundfonts/FluidR3_GM.sf2"  # Update this to your actual SoundFont path
 
 # Load Model
 model = TinyMelodyTransformer().to(DEVICE)
@@ -32,18 +32,20 @@ for _ in range(32):
         generated.append(next_interval)
         input_seq = torch.cat([input_seq, torch.tensor([[next_token]], dtype=torch.long).to(DEVICE)], dim=0)
 
-# Convert to Absolute MIDI Pitches (starting from middle C, 60)
+# Convert to Absolute MIDI Pitches (starting from Middle C = 60)
 pitches = []
-current_pitch = 60  # Starting pitch (Middle C)
+current_pitch = 60
+
 for interval in generated:
     current_pitch += interval
+    current_pitch = max(0, min(127, current_pitch))  # Clamp to valid MIDI pitch range
     pitches.append(current_pitch)
 
 # Create PrettyMIDI Object
 midi = pretty_midi.PrettyMIDI()
 instrument = pretty_midi.Instrument(program=0)  # Acoustic Grand Piano
 start_time = 0.0
-duration = 0.5  # Fixed duration per note for simplicity
+duration = 0.5  # Fixed note duration; you can make this dynamic if needed
 
 for pitch in pitches:
     note = pretty_midi.Note(
@@ -57,5 +59,8 @@ midi.write(OUTPUT_MIDI)
 
 # Play with Fluidsynth
 subprocess.run(["fluidsynth", "-ni", SOUNDFONT_PATH, OUTPUT_MIDI, "-F", "out.wav", "-r", "44100"])
-subprocess.run(["aplay", "out.wav"])  # Or use any system audio player you prefer
-
+# if linux
+#subprocess.run(["aplay", "out.wav"])  # On MacOS, replace with 'afplay' or 'open out.wav' if needed
+# if mac
+#subprocess.run(["afplay", "out.wav"])  # Native Mac audio player
+subprocess.run(["open", "out.wav"])
