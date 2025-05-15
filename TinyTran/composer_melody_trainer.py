@@ -221,8 +221,12 @@ def train():
                 # Assume center pitch is Middle C (MIDI 60)
                 # We're trying to rationalize the note register here - can't be too high or too lowSo now 
                 center_pitch = 60
+                # Reconstruct predicted pitches from intervals
                 predicted_pitches = center_pitch + torch.cumsum(batch_intervals_tensor.float(), dim=1)
-                register_penalty = torch.mean((predicted_pitches - center_pitch) ** 2) * 0.001  # Adjust weight as needed
+                # Calculate mean squared deviation from center
+                register_penalty_weight = 0.005  # Try values from 0.001 to 0.01
+                register_penalty = torch.mean((predicted_pitches - center_pitch) ** 2) * register_penalty_weight
+                #register_penalty = torch.mean((predicted_pitches - center_pitch) ** 2) * 0.001  # Adjust weight as needed
 
                 total_batch_loss = loss_interval + loss_duration + loss_register + register_penalty                
 
@@ -302,7 +306,12 @@ if __name__ == "__main__":
     parser.add_argument("--evaluate", type=str, default=None, help="Path to checkpoint file to evaluate only")
     parser.add_argument("--batch_size", type=int, default=BATCH_SIZE, help="Training batch size")
     parser.add_argument("--resume_checkpoint", type=str, default=None, help="Path to checkpoint to resume training from")
-
+    parser.add_argument(
+        "--register_penalty_weight", 
+        type=float, 
+        default=0.001, 
+        help="Weight for register drift penalty in loss function (default: 0.001)"
+)
     args = parser.parse_args()
 
     META_CSV = args.meta_csv

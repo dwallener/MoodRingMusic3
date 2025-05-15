@@ -8,7 +8,7 @@ from composer_melody_trainer import (
     TinyMelodyTransformer, INTERVAL_VOCAB, DURATION_VOCAB, DEVICE, build_dataset
 )
 
-Is # CLI Argument Parser
+# CLI Argument Parser
 parser = argparse.ArgumentParser(description="Test Trained Melody Generator with Register Bias")
 parser.add_argument("--checkpoint", type=str, required=True, help="Path to model checkpoint")
 parser.add_argument("--soundfont", type=str, required=True, help="Path to SoundFont (.sf2) file")
