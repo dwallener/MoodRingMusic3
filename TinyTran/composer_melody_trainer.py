@@ -218,6 +218,14 @@ def train():
 
                     total_batch_loss = loss_interval + loss_duration + loss_register
 
+                # Assume center pitch is Middle C (MIDI 60)
+                # We're trying to rationalize the note register here - can't be too high or too lowSo now 
+                center_pitch = 60
+                predicted_pitches = center_pitch + torch.cumsum(batch_intervals_tensor.float(), dim=1)
+                register_penalty = torch.mean((predicted_pitches - center_pitch) ** 2) * 0.001  # Adjust weight as needed
+
+                total_batch_loss = loss_interval + loss_duration + loss_register + register_penalty                
+
                 scaler.scale(total_batch_loss).backward()
                 scaler.step(optimizer)
                 scaler.update()
