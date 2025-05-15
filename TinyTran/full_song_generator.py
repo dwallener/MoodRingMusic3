@@ -8,12 +8,14 @@ from composer_melody_trainer import (
     TinyMelodyTransformer, INTERVAL_VOCAB, DURATION_VOCAB, DEVICE, build_dataset
 )
 
-# CLI Arguments
-parser = argparse.ArgumentParser(description="Generate a Full Song from JSON Structure")
+Is # CLI Argument Parser
+parser = argparse.ArgumentParser(description="Test Trained Melody Generator with Register Bias")
+parser.add_argument("--checkpoint", type=str, required=True, help="Path to model checkpoint")
+parser.add_argument("--soundfont", type=str, required=True, help="Path to SoundFont (.sf2) file")
+parser.add_argument("--output_midi", type=str, default="generated_melody.mid", help="Output MIDI filename")
+parser.add_argument("--bias_strength", type=float, default=0.05, help="Register gravity strength (default: 0.05)")
+parser.add_argument("--temperature", type=float, default=0.8, help="Sampling temperature (default: 0.8)")
 parser.add_argument("--structure_file", type=str, required=True, help="Path to JSON song structure")
-parser.add_argument("--checkpoint", type=str, required=True, help="Path to trained model checkpoint")
-parser.add_argument("--output_midi", type=str, default="full_song.mid", help="Output MIDI file name")
-parser.add_argument("--soundfont", type=str, required=True, help="Path to SoundFont (SF2) file")
 args = parser.parse_args()
 
 # Load Song Structure
@@ -56,17 +58,22 @@ for section in song_structure:
     current_pitch = 60  # Middle C
     pitches = []
 
+    center_pitch = 60
+
     for _ in range(bars * 8):  # Assuming 8 notes per bar
         with torch.no_grad():
             pred_intervals, pred_durations, pred_registers = model(input_seq)
 
-            # Apply Temperature to Interval Prediction
-            next_token_logits = pred_intervals[-1] / temperature
+            # Apply Temperature and Register Bias
+            next_token_logits = pred_intervals[-1] / args.temperature
+            current_bias = -args.bias_strength * (current_pitch - center_pitch)
+            next_token_logits += current_bias
+
             next_token = torch.argmax(next_token_logits).item()
             next_interval = INTERVAL_VOCAB[next_token] if next_token < len(INTERVAL_VOCAB) else 0
             generated.append(next_interval)
 
-            # Duration Prediction
+            # Predict Duration as before
             next_duration_logits = pred_durations[-1]
             next_duration_token = torch.argmax(next_duration_logits).item()
             next_duration = DURATION_VOCAB[next_duration_token]
@@ -76,7 +83,7 @@ for section in song_structure:
                 [input_seq, torch.tensor([[next_token]], dtype=torch.long).to(DEVICE)], dim=0
             )
 
-            # Update pitch and clamp
+            # Update pitch and clamp to valid range
             current_pitch += next_interval
             current_pitch = max(0, min(127, current_pitch))
             pitches.append(current_pitch)
