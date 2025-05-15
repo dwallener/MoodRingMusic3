@@ -165,7 +165,15 @@ def train():
 
     scaler = torch.cuda.amp.GradScaler()
 
-    for epoch in range(1, EPOCHS + 1):
+    if args.resume_checkpoint:
+        checkpoint = torch.load(args.resume_checkpoint, map_location=DEVICE)
+        model.load_state_dict(checkpoint["model_state_dict"])
+        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        start_epoch = checkpoint.get("epoch", 1)
+    else:
+        start_epoch = 1    
+
+    for epoch in range(start_epoch, EPOCHS + 1):
         model.train()
         total_loss = 0
         batch_inputs, batch_intervals, batch_durations, batch_registers = [], [], [], []
@@ -222,7 +230,12 @@ def train():
         if epoch % CHECKPOINT_INTERVAL == 0:
             os.makedirs(SAVE_DIR, exist_ok=True)
             checkpoint_path = os.path.join(SAVE_DIR, f"{COMPOSER}_epoch{epoch}.pt")
-            torch.save(model.state_dict(), checkpoint_path)
+            #torch.save(model.state_dict(), checkpoint_path)
+            torch.save({
+                "epoch": epoch,
+                "model_state_dict": model.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict()
+            }, checkpoint_path)
 
     validate(model, val_data)
 
@@ -280,6 +293,7 @@ if __name__ == "__main__":
     parser.add_argument("--seed_length", type=int, default=SEED_LENGTH, help="Number of tokens in the seed phrase")
     parser.add_argument("--evaluate", type=str, default=None, help="Path to checkpoint file to evaluate only")
     parser.add_argument("--batch_size", type=int, default=BATCH_SIZE, help="Training batch size")
+    parser.add_argument("--resume_checkpoint", type=str, default=None, help="Path to checkpoint to resume training from")
 
     args = parser.parse_args()
 
