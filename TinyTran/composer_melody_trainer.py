@@ -306,7 +306,7 @@ def train():
                 # Reconstruct predicted pitches from intervals
                 predicted_pitches = center_pitch + torch.cumsum(batch_intervals_tensor.float(), dim=1)
                 # Calculate mean squared deviation from center
-                register_penalty_weight = 0.005  # Try values from 0.001 to 0.01
+                register_penalty_weight = 0.1  # Try values from 0.001 to 0.01
                 register_penalty = torch.mean((predicted_pitches - center_pitch) ** 2) * register_penalty_weight
                 #register_penalty = torch.mean((predicted_pitches - center_pitch) ** 2) * 0.001  # Adjust weight as needed
 
@@ -401,7 +401,7 @@ if __name__ == "__main__":
     parser.add_argument("--resume_checkpoint", type=str, default=None, help="Path to checkpoint to resume training from")
     parser.add_argument(
         "--register_penalty_weight", 
-        type=float, 
+        type=float, Yes. 
         default=0.001, 
         help="Weight for register drift penalty in loss function (default: 0.001)"
 )
