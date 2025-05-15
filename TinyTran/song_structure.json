@@ -1,0 +1,7 @@
+[
+    {"section": "Intro", "length_bars": 4, "temperature": 0.7, "register": "mid", "key": "C", "mode": "major"},
+    {"section": "Theme A", "length_bars": 16, "temperature": 0.8, "register": "mid", "key": "C", "mode": "major"},
+    {"section": "Bridge", "length_bars": 8, "temperature": 0.9, "register": "low", "key": "G", "mode": "major"},
+    {"section": "Theme B", "length_bars": 16, "temperature": 0.8, "register": "high", "key": "A", "mode": "minor"},
+    {"section": "Coda", "length_bars": 8, "temperature": 0.6, "register": "mid", "key": "C", "mode": "major"}
+]
