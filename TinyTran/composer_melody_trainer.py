@@ -9,6 +9,8 @@ import torch.nn as nn
 import torch.optim as optim
 from tqdm import tqdm
 import pretty_midi
+from torch.nn.utils.rnn import pad_sequence
+
 
 # --------------------
 # CONFIGURATION (Defaults)
@@ -171,9 +173,24 @@ class TinyMelodyTransformer(nn.Module):
         self.duration_head = nn.Linear(128, DURATION_VOCAB_SIZE)    # Predict Durations
         self.register_head = nn.Linear(128, REGISTER_VOCAB_SIZE)    # Predict Register Classes
 
+    """
     def forward(self, x):
         x = self.embed(x)
         x = self.transformer(x)
+        return self.interval_head(x), self.duration_head(x), self.register_head(x)
+    """
+
+    def forward(self, x, attention_mask=None):
+        x = self.embed(x)
+
+        if attention_mask is not None:
+            # Transformer expects mask shape: (batch_size, sequence_length)
+            # Convert to (sequence_length, sequence_length) causal mask if necessary
+            # But since this is a padding mask, use directly:
+            x = self.transformer(x, src_key_padding_mask=~attention_mask)
+        else:
+            x = self.transformer(x)
+
         return self.interval_head(x), self.duration_head(x), self.register_head(x)
 
 # --------------------
@@ -189,19 +206,18 @@ def train():
 
     model = TinyMelodyTransformer().to(DEVICE)
     optimizer = optim.Adam(model.parameters(), lr=1e-3)
-    loss_fn_interval = nn.CrossEntropyLoss()
-    loss_fn_duration = nn.CrossEntropyLoss()
-    loss_fn_register = nn.CrossEntropyLoss()
+    loss_fn_interval = nn.CrossEntropyLoss(ignore_index=-1)
+    loss_fn_duration = nn.CrossEntropyLoss(ignore_index=-1)
+    loss_fn_register = nn.CrossEntropyLoss(ignore_index=-1)
 
-    scaler = torch.cuda.amp.GradScaler()
+    scaler = torch.cuda.amp.GradScaler(enabled=torch.cuda.is_available())
 
+    start_epoch = 1
     if args.resume_checkpoint:
         checkpoint = torch.load(args.resume_checkpoint, map_location=DEVICE)
         model.load_state_dict(checkpoint["model_state_dict"])
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
         start_epoch = checkpoint.get("epoch", 1)
-    else:
-        start_epoch = 1    
 
     for epoch in range(start_epoch, EPOCHS + 1):
         model.train()
@@ -210,19 +226,20 @@ def train():
 
         for idx, (seed, target_intervals, target_durations, target_registers) in enumerate(tqdm(train_data)):
             input_seq = seed + target_intervals[:-1]
+            #input_seq = seed
 
             input_tensor = torch.tensor(
                 [INTERVAL_VOCAB.index(i) for i in input_seq], dtype=torch.long
-            ).unsqueeze(0)
+            ) # .unsqueeze(0)
             interval_tensor = torch.tensor(
                 [INTERVAL_VOCAB.index(i) for i in target_intervals], dtype=torch.long
-            ).unsqueeze(0)
+            )# .unsqueeze(0)
             duration_tensor = torch.tensor(
                 [DURATION_VOCAB.index(i) for i in target_durations], dtype=torch.long
-            ).unsqueeze(0)
+            )# .unsqueeze(0)
             register_tensor = torch.tensor(
                 [REGISTER_VOCAB.index(i) for i in target_registers], dtype=torch.long
-            ).unsqueeze(0)
+            )# .unsqueeze(0)
 
             batch_inputs.append(input_tensor)
             batch_intervals.append(interval_tensor)
@@ -230,21 +247,52 @@ def train():
             batch_registers.append(register_tensor)
 
             if len(batch_inputs) == BATCH_SIZE or idx == len(train_data) - 1:
-                batch_inputs_tensor = torch.cat(batch_inputs).to(DEVICE)
-                batch_intervals_tensor = torch.cat(batch_intervals).to(DEVICE)
-                batch_durations_tensor = torch.cat(batch_durations).to(DEVICE)
-                batch_registers_tensor = torch.cat(batch_registers).to(DEVICE)
+                batch_inputs_tensor = pad_sequence(batch_inputs, batch_first=True, padding_value=INTERVAL_PAD).to(DEVICE)
+                batch_intervals_tensor = pad_sequence(batch_intervals, batch_first=True, padding_value=-1).to(DEVICE)
+                batch_durations_tensor = pad_sequence(batch_durations, batch_first=True, padding_value=-1).to(DEVICE)
+                batch_registers_tensor = pad_sequence(batch_registers, batch_first=True, padding_value=-1).to(DEVICE)
+
+                # Create Attention Mask (True for valid tokens, False for padding)
+                attention_mask = (batch_inputs_tensor != INTERVAL_PAD).to(torch.bool)
 
                 optimizer.zero_grad()
                 with torch.cuda.amp.autocast():
-                    pred_intervals, pred_durations, pred_registers = model(batch_inputs_tensor)
+
+                    # Check Shapes
+                    print(f"batch_inputs_tensor.shape: {batch_inputs_tensor.shape}")
+                    print(f"batch_durations_tensor.shape: {batch_durations_tensor.shape}")
+
+                    # Model Call    
+                    pred_intervals, pred_durations, pred_registers = model(
+                        batch_inputs_tensor, attention_mask=attention_mask
+                    )
+
+                    print(f"pred_durations.shape: {pred_durations.shape}")
+
+                    # Align predictions with target sequence lengths before applying masks
                     pred_intervals = pred_intervals[:, -batch_intervals_tensor.size(1):, :]
                     pred_durations = pred_durations[:, -batch_durations_tensor.size(1):, :]
                     pred_registers = pred_registers[:, -batch_registers_tensor.size(1):, :]
 
-                    loss_interval = loss_fn_interval(pred_intervals.reshape(-1, VOCAB_SIZE), batch_intervals_tensor.reshape(-1))
-                    loss_duration = loss_fn_duration(pred_durations.reshape(-1, DURATION_VOCAB_SIZE), batch_durations_tensor.reshape(-1))
-                    loss_register = loss_fn_register(pred_registers.reshape(-1, REGISTER_VOCAB_SIZE), batch_registers_tensor.reshape(-1))
+                    # Create valid masks for each target
+                    valid_intervals = batch_intervals_tensor != -1
+                    valid_durations = batch_durations_tensor != -1
+                    valid_registers = batch_registers_tensor != -1
+
+                    # Flatten predictions and targets based on valid masks
+                    pred_intervals_flat = pred_intervals[valid_intervals]
+                    batch_intervals_flat = batch_intervals_tensor[valid_intervals]
+
+                    pred_durations_flat = pred_durations[valid_durations]
+                    batch_durations_flat = batch_durations_tensor[valid_durations]
+
+                    pred_registers_flat = pred_registers[valid_registers]
+                    batch_registers_flat = batch_registers_tensor[valid_registers]
+
+                    # Compute losses
+                    loss_interval = loss_fn_interval(pred_intervals_flat, batch_intervals_flat)
+                    loss_duration = loss_fn_duration(pred_durations_flat, batch_durations_flat)
+                    loss_register = loss_fn_register(pred_registers_flat, batch_registers_flat)
 
                     total_batch_loss = loss_interval + loss_duration + loss_register
 
