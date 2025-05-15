@@ -36,22 +36,20 @@ MODE_VOCAB_SIZE = len(MODE_VOCAB)
 # Helper Function for Chord Type Detection
 def detect_chord_type(notes):
     if len(notes) < 3:
-        return CHORD_TYPES.index('major')  # Default to 'major' if too few notes
+        return CHORD_TYPES.index('maj')  # Default to 'major' if too few notes
 
     pitch_classes = sorted(set([note.pitch % 12 for note in notes]))
 
     intervals = {
-        'major': [0, 4, 7],
-        'minor': [0, 3, 7],
-        'diminished': [0, 3, 6],
-        'augmented': [0, 4, 8],
+        'maj': [0, 4, 7],
+        'min': [0, 3, 7],
+        'dim': [0, 3, 6],
+        'aug': [0, 4, 8],
         'sus2': [0, 2, 7],
         'sus4': [0, 5, 7],
-        'major7': [0, 4, 7, 11],
-        'minor7': [0, 3, 7, 10],
-        'dominant7': [0, 4, 7, 10],
-        'half-diminished7': [0, 3, 6, 10],
-        'diminished7': [0, 3, 6, 9],
+        'maj7': [0, 4, 7, 11],
+        'min7': [0, 3, 7, 10],
+        '7': [0, 4, 7, 10],  # Dominant 7 is just '7' in CHORD_TYPES
     }
 
     for chord_name, interval_pattern in intervals.items():
@@ -60,13 +58,18 @@ def detect_chord_type(notes):
         if all(pc in pitch_classes for pc in expected_pitches):
             return CHORD_TYPES.index(chord_name)
 
-    return CHORD_TYPES.index('major')  # Fallback to 'major'
+    return CHORD_TYPES.index('maj')  # Fallback to 'major'
 
 def detect_style(notes):
-    # Whole if all notes start at the same time, else broken
-    start_times = [note.start for note in notes]
-    return 0 if len(set(start_times)) == 1 else 1
+    if len(notes) <= 1:
+        return HARMONY_STYLE_VOCAB.index("whole")  # Single note treated as 'whole' chord
 
+    start_times = [note.start for note in notes]
+    if max(start_times) - min(start_times) > 0.05:  # Small threshold for simultaneous onset
+        return HARMONY_STYLE_VOCAB.index("broken")
+    return HARMONY_STYLE_VOCAB.index("whole")
+
+    
 # Model Definition
 class TinyHarmonyTransformer(nn.Module):
     def __init__(self):
@@ -96,7 +99,7 @@ class TinyHarmonyTransformer(nn.Module):
 
         return self.root_head(x), self.type_head(x), self.style_head(x)
 
-# Real Dataset Loader
+###
 def build_harmony_dataset():
     meta = pd.read_csv(META_CSV)
     if COMPOSER:
@@ -118,20 +121,26 @@ def build_harmony_dataset():
                 seed_notes = notes[:4]
                 target_notes = notes[4:36]
 
-                seed_roots = [note.pitch for note in seed_notes]
+                # Map to pitch class (0-11)
+                seed_roots = [note.pitch % 12 for note in seed_notes]
                 seed_types = [detect_chord_type(seed_notes) for _ in range(4)]
                 seed_melody = [note.pitch for note in seed_notes]
 
-                target_roots = [note.pitch for note in target_notes]
+                target_roots = [note.pitch % 12 for note in target_notes]
                 target_types = [detect_chord_type(target_notes[i:i+3]) for i in range(len(target_notes))]
                 target_melody = [note.pitch for note in target_notes]
                 target_styles = [detect_style(target_notes[i:i+3]) for i in range(len(target_notes))]
 
-                sequences.append((seed_roots, seed_types, seed_melody, 0, 0, target_roots, target_types, target_melody, target_styles))
-        except:
+                sequences.append((
+                    seed_roots, seed_types, seed_melody, 0, 0,  # key and mode defaulted to 0 here
+                    target_roots, target_types, target_melody, target_styles
+                ))
+        except Exception as e:
+            # You might want to log errors to understand if specific files fail consistently
             continue
 
     return sequences
+
 
 # Training Loop
 def train_harmony():
