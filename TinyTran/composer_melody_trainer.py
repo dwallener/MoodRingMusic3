@@ -11,6 +11,8 @@ from tqdm import tqdm
 import pretty_midi
 from torch.nn.utils.rnn import pad_sequence
 
+import matplotlib.pyplot as plt
+from IPython.display import clear_output
 
 # --------------------
 # CONFIGURATION (Defaults)
@@ -203,6 +205,8 @@ def train():
     split = int(0.8 * len(sequences))
     train_data = sequences[:split]
     val_data = sequences[split:]
+    # simple plot of loss history
+    loss_history = []
 
     model = TinyMelodyTransformer().to(DEVICE)
     optimizer = optim.Adam(model.parameters(), lr=1e-3)
@@ -316,6 +320,17 @@ def train():
                 batch_inputs, batch_intervals, batch_durations, batch_registers = [], [], [], []
 
         print(f"Epoch {epoch} Loss: {total_loss/len(train_data):.4f}")
+        loss_history.append(total_loss / len(train_data))
+
+        clear_output(wait=True)
+        plt.figure(figsize=(8, 4))
+        plt.plot(loss_history, label="Training Loss")
+        plt.xlabel("Epoch")
+        plt.ylabel("Loss")
+        plt.title("Loss Over Epochs")
+        plt.grid(True)
+        plt.legend()
+        plt.show()
 
         if epoch % CHECKPOINT_INTERVAL == 0:
             os.makedirs(SAVE_DIR, exist_ok=True)
