@@ -27,3 +27,6 @@ python composer_melody_trainer.py \
     --composer Chopin \
     --evaluate checkpoints/Chopin_epoch500.pt
 ```
+
+Model Training: ```composer_melody_trainer.py```
+Song generation with trained model: ```full_song_generator.py```
