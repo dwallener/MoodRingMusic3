@@ -8,7 +8,7 @@ import numpy as np
 from composer_melody_trainer import (
     TinyMelodyTransformer, INTERVAL_VOCAB, DURATION_VOCAB, DEVICE, build_dataset
 )
-from composer_harmony_trainer import TinyHarmonyTransformer, HARMONY_ROOT_VOCAB, HARMONY_TYPE_VOCAB, DEVICE as DEVICE_HARMONY
+from composer_harmony_trainer import TinyHarmonyTransformer, HARMONY_ROOT_VOCAB, CHORD_TYPES, DEVICE as DEVICE_HARMONY
 
 # --- Mappings ---
 BPM_RANGES = {
