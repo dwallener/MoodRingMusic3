@@ -107,7 +107,7 @@ def extract_melody_intervals(midi_path):
     except:
         return []
 
-
+"""
 def build_dataset():
     meta = pd.read_csv(META_CSV)
     files = meta[meta['composer'].str.contains(COMPOSER, na=False)]['midi_filename'].tolist()
@@ -122,6 +122,36 @@ def build_dataset():
                 target_intervals = intervals[i+SEED_LENGTH:i+SEED_LENGTH+32]
                 target_durations = durations[i+SEED_LENGTH:i+SEED_LENGTH+32]
                 target_registers = registers[i+SEED_LENGTH:i+SEED_LENGTH+32]
+                sequences.append((seed, target_intervals, target_durations, target_registers))
+
+    return sequences
+"""
+
+def build_dataset(target_beats=128, tolerance=5.0):
+    meta = pd.read_csv(META_CSV)
+    files = meta[meta['composer'].str.contains(COMPOSER, na=False)]['midi_filename'].tolist()
+    sequences = []
+
+    for fname in tqdm(files):
+        intervals, durations, registers = extract_melody_features(os.path.join(MIDI_BASE, fname))
+
+        # Skip if not enough data in this file
+        if len(durations) < SEED_LENGTH:
+            continue
+
+        for i in range(len(durations) - SEED_LENGTH):
+            cum_dur = 0.0
+            j = i + SEED_LENGTH
+            while j < len(durations) and cum_dur < target_beats:
+                cum_dur += durations[j]
+                j += 1
+
+            # Check if cumulative duration is within tolerance
+            if abs(cum_dur - target_beats) <= tolerance:
+                seed = intervals[i:i+SEED_LENGTH]
+                target_intervals = intervals[i+SEED_LENGTH:j]
+                target_durations = durations[i+SEED_LENGTH:j]
+                target_registers = registers[i+SEED_LENGTH:j]
                 sequences.append((seed, target_intervals, target_durations, target_registers))
 
     return sequences
