@@ -17,12 +17,19 @@ BATCH_SIZE = 32
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Vocab Definitions
-CHORD_TYPES = [
-    'major', 'minor', 'diminished', 'augmented', 'sus2', 'sus4',
-    'major7', 'minor7', 'dominant7', 'half-diminished7', 'diminished7'
-]
+
+# Chord Types
+CHORD_TYPES = ["maj", "min", "dim", "aug", "7", "maj7", "min7", "sus2", "sus4"]
 CHORD_VOCAB_SIZE = len(CHORD_TYPES)
+# Harmony Vocabulary
+HARMONY_ROOT_VOCAB = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+HARMONY_ROOT_VOCAB_SIZE = len(HARMONY_ROOT_VOCAB)
+# Chord Style Vocabulary
+HARMONY_STYLE_VOCAB = ["whole", "broken"]  # Optional: if you implemented the whole/broken style flag
+HARMONY_STYLE_VOCAB_SIZE = len(HARMONY_STYLE_VOCAB)
+
 KEY_VOCAB_SIZE = 24
+
 MODE_VOCAB = ['major', 'minor']
 MODE_VOCAB_SIZE = len(MODE_VOCAB)
 
@@ -64,7 +71,7 @@ def detect_style(notes):
 class TinyHarmonyTransformer(nn.Module):
     def __init__(self):
         super().__init__()
-        self.embed_roots = nn.Embedding(128, 128)
+        self.embed_roots = nn.Embedding(HARMONY_ROOT_VOCAB_SIZE, 128)
         self.embed_types = nn.Embedding(CHORD_VOCAB_SIZE, 128)
         self.embed_key = nn.Embedding(KEY_VOCAB_SIZE, 32)
         self.embed_mode = nn.Embedding(MODE_VOCAB_SIZE, 16)
@@ -73,9 +80,9 @@ class TinyHarmonyTransformer(nn.Module):
         encoder_layer = nn.TransformerEncoderLayer(d_model=368, nhead=4, batch_first=True)
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=2)
 
-        self.root_head = nn.Linear(368, 128)
-        self.type_head = nn.Linear(368, CHORD_VOCAB_SIZE)
-        self.style_head = nn.Linear(368, 2)  # Whole/Broken
+        self.root_head = nn.Linear(368, HARMONY_ROOT_VOCAB_SIZE)
+        self.type_head = nn.Linear(368, CHORD_VOCAB_SIZE)        
+        self.style_head = nn.Linear(368, HARMONY_STYLE_VOCAB_SIZE)  # Whole/Broken
 
     def forward(self, root_seq, type_seq, melody_seq, key_sig, mode_sig):
         root_embed = self.embed_roots(root_seq)
@@ -231,3 +238,5 @@ if __name__ == "__main__":
     BATCH_SIZE = args.batch_size
 
     train_harmony()
+
+
