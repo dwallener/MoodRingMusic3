@@ -1,4 +1,68 @@
 # MoodRingMusic3
+
+📚 Project Structure
+TinyTran/
+├── extract_phrases_for_training.py
+├── train_phrase_transformer.py
+├── generate_phrase.py
+├── orchestration_composition_music21.py
+├── orchestration_composition_mido.py
+├── phrase_dataset_short.json
+├── phrase_dataset_medium.json
+├── phrase_dataset_long.json
+├── tiny_transformer_phrase_dataset_short.pt
+├── tiny_transformer_phrase_dataset_medium.pt
+├── tiny_transformer_phrase_dataset_long.pt
+└── ... (vocab files)
+
+🚀 Usage
+
+1. Prepare Datasets
+
+Extract phrases from .krn files and split them into datasets:
+
+python extract_phrases_for_training.py /path/to/krn/folder
+
+2. Train Models
+
+Train models for each phrase type (Short, Medium, Long):
+
+python train_phrase_transformer.py phrase_dataset_short.json
+python train_phrase_transformer.py phrase_dataset_medium.json
+python train_phrase_transformer.py phrase_dataset_long.json
+
+3. Generate Phrases
+
+Generate a phrase from a trained model:
+
+python generate_phrase.py <model_file.pt> <vocab_file.json> <phrase_length> [temperature]
+python generate_phrase.py tiny_transformer_phrase_dataset_short.pt tiny_transformer_phrase_dataset_short.vocab.json 16 1.2
+
+4. Orchestrate a Full Composition
+
+Using Music21:
+
+python orchestration_composition_music21.py
+
+Using Mido (preferred for playback reliability):
+
+python orchestration_composition_mido.py
+
+🎛️ Parameters
+	•	phrase_length: Controls generated phrase length directly (used during generation).
+	•	temperature: Adjusts randomness. Lower for conservative, higher for exploratory output (default: 1.0).
+
+⸻
+
+📖 Notes
+	•	All data is normalized to key of C for simplicity.
+	•	The system currently focuses on the melodic line. Bass and harmony generation are planned for future versions.
+	•	Generated .mid files can be converted to .wav using fluidsynth or played directly in Logic Pro, Ableton, etc.
+
+
+# ----- everything below here is the archeological record
+
+
 Fresh start incorporating learnings from MRM and MRM2
 
 The algorithmic portion is locked and loaded. All the features you'd expect - diurnal, mood, user genre preference - are reflected in the generation algorithm.
