@@ -45,7 +45,7 @@ parser.add_argument("--mood", type=str, required=True, choices=list(BPM_RANGES.k
 parser.add_argument("--circadian_phase", type=str, required=True, choices=["Morning", "Midday", "Evening", "Night"])
 parser.add_argument("--bias_strength", type=float, default=0.05)
 parser.add_argument("--temperature", type=float, default=0.8)
-parser.add_argument("--melody_key_penalty", type=float, default=0.5)
+parser.add_argument("--melody_key_penalty", type=float, default=5.0) # 0.5 was old default, wasn't enough
 parser.add_argument("--harmony_key_strictness", type=float, default=1.0)
 args = parser.parse_args()
 
@@ -71,6 +71,28 @@ key = random.choice(KEY_MAP[args.mood])
 scale_notes = SCALE_NOTES[key]
 
 print(f"\n🎵 Generating in Key: {key} Major | BPM: {bpm} | Mood: {args.mood} | Phase: {args.circadian_phase}")
+
+
+def build_chord_notes(root, chord_type, reference_pitch=60):
+    """Build chord notes based on root, chord type, and nearby register."""
+    intervals = {
+        "maj": [0, 4, 7],
+        "min": [0, 3, 7],
+        "dim": [0, 3, 6],
+        "aug": [0, 4, 8],
+        "7": [0, 4, 7, 10],
+        "maj7": [0, 4, 7, 11],
+        "min7": [0, 3, 7, 10],
+        "sus2": [0, 2, 7],
+        "sus4": [0, 5, 7]
+    }
+    chord_type = chord_type if chord_type in intervals else "maj"
+    
+    # Find the octave closest to the reference pitch (melody or bass line)
+    base_octave = (reference_pitch // 12) * 12
+    
+    return [root + base_octave + interval for interval in intervals[chord_type]]
+
 
 # --- Load Structure ---
 with open(args.structure_file, 'r') as f:
@@ -104,10 +126,17 @@ for section in song_structure:
 
             # Apply Melody Key Penalty
             logits = pred_intervals[-1].cpu().numpy()
-            for idx, interval in enumerate(INTERVAL_VOCAB):
+            if len(logits) > 1:
+                for idx, interval in enumerate(INTERVAL_VOCAB):
+                    test_pitch = (current_pitch + interval) % 12
+                    if test_pitch not in scale_notes:
+                        logits[idx] -= args.melody_key_penalty
+            else:
+                # Apply the penalty directly to the only value, if needed
+                interval = INTERVAL_VOCAB[0]
                 test_pitch = (current_pitch + interval) % 12
                 if test_pitch not in scale_notes:
-                    logits[idx] -= args.melody_key_penalty
+                    logits[0] -= args.melody_key_penalty
 
             next_token = np.argmax(logits)
             next_interval = INTERVAL_VOCAB[next_token] if next_token < len(INTERVAL_VOCAB) else 0
@@ -129,20 +158,39 @@ for section in song_structure:
             pitches.append(current_pitch)
 
     # Harmony Generation (Placeholder: one chord per bar for simplicity)
-    chords = []
-    for _ in range(bars):
-        root = random.choice(scale_notes)
-        chord = (root, "maj")  # Simplified to major chords for now
-        chords.append(chord)
+    #chords = []
+    #for _ in range(bars):
+    #    root = random.choice(scale_notes)
+    #    chord = (root, "maj")  # Simplified to major chords for now
+    #    chords.append(chord)
 
+    harmony_input_roots = torch.tensor([[note % 12 for note in pitches[:bars * 4]]], dtype=torch.long).to(DEVICE_HARMONY)
+    harmony_input_types = torch.zeros_like(harmony_input_roots).to(DEVICE_HARMONY)  # Placeholder if no prior types
+    harmony_input_melody = torch.tensor([[int(p) for p in pitches[:bars * 4]]], dtype=torch.long).to(DEVICE_HARMONY)
+    key_sig = torch.tensor([0]).to(DEVICE_HARMONY)  # Simplified
+    mode_sig = torch.tensor([0]).to(DEVICE_HARMONY)  # 0 for Major
+
+    with torch.no_grad():
+        pred_roots, pred_types, pred_styles = harmony_model(
+            harmony_input_roots, harmony_input_types, harmony_input_melody, key_sig, mode_sig
+        )
+
+    # Only take the *last step's prediction* for the harmony at this point
+    predicted_root_idx = torch.argmax(pred_roots[-1]).item()
+    predicted_type_idx = torch.argmax(pred_types[-1]).item()
+
+    predicted_root = HARMONY_ROOT_VOCAB[predicted_root_idx % len(HARMONY_ROOT_VOCAB)]
+    predicted_type = CHORD_TYPES[predicted_type_idx % len(CHORD_TYPES)]
+
+    # Append directly to final chords
     final_pitches.extend(pitches)
     final_durations.extend(durations)
-    final_chords.extend(chords)
+    final_chords.append((predicted_root, predicted_type))  # This is the correct single chord for the section
 
 # --- MIDI Rendering ---
 midi = pretty_midi.PrettyMIDI()
 melody_instr = pretty_midi.Instrument(program=0)  # Acoustic Grand Piano
-harmony_instr = pretty_midi.Instrument(program=48)  # Strings Ensemble
+harmony_instrument = pretty_midi.Instrument(program=48)  # Strings Ensemble
 
 start_time = 0.0
 
@@ -153,19 +201,48 @@ for pitch, duration in zip(final_pitches, final_durations):
     melody_instr.notes.append(note)
     start_time += duration
 
-# Simple harmony rendering (pad-style)
-chord_time = 0.0
-for root, chord_type in final_chords:
-    chord_pitches = [root + 60, root + 64, root + 67]  # Simple triad
-    for cp in chord_pitches:
+
+# Harmony Style Prediction (Whole or Broken)
+current_time = 0.0 
+chord_duration = 4.0
+pred_styles = torch.softmax(pred_styles, dim=-1)
+style_probs = pred_styles[-1].cpu().numpy()
+style_choice = np.argmax(style_probs)  # 0 = Whole, 1 = Broken
+
+root_midi_value = HARMONY_ROOT_VOCAB.index(predicted_root)  # Converts 'C' → 0, 'C#' → 1, etc.
+chord_notes = build_chord_notes(root_midi_value, predicted_type, current_pitch)
+
+if style_choice == 0:  # Whole Chord (Pad)
+    for note_pitch in chord_notes:
         note = pretty_midi.Note(
-            velocity=80, pitch=int(cp), start=chord_time, end=chord_time + 2.0
+            velocity=80, pitch=int(note_pitch), 
+            start=current_time, end=current_time + chord_duration
         )
-        harmony_instr.notes.append(note)
-    chord_time += 4.0  # Assuming 4 beats per bar
+        harmony_instrument.notes.append(note)
+else:  # Broken Chord (Arpeggio)
+    # Randomly select a pattern
+    arpeggio_patterns = [
+        [0, 1, 2],  # Ascending
+        [2, 1, 0],  # Descending
+        [0, 2, 1],  # Up-Down
+        [1, 0, 2],  # Random variation
+    ]
+    pattern = random.choice(arpeggio_patterns)
+    note_time = current_time
+    per_note_duration = chord_duration / len(pattern)
+    
+    for idx in pattern:
+        note_pitch = chord_notes[idx % len(chord_notes)]
+        note = pretty_midi.Note(
+            velocity=80, pitch=int(note_pitch), 
+            start=note_time, end=note_time + per_note_duration
+        )
+        harmony_instrument.notes.append(note)
+        note_time += per_note_duration
+
 
 midi.instruments.append(melody_instr)
-midi.instruments.append(harmony_instr)
+midi.instruments.append(harmony_instrument)
 midi.write(args.output_midi)
 
 # --- Play Final Song ---
