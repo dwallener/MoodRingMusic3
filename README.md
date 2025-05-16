@@ -31,3 +31,30 @@ python composer_melody_trainer.py \
 Model Training: ```composer_melody_trainer.py```
 
 Song generation with trained model: ```full_song_generator.py```
+
+
+
+### Big Changes
+
+Too many issues to list, with the previous approach. Mostly revolving around - here's a shocker - clean training data. 
+New approach...
+
+- Use .krn
+- Heuristics on .krn
+- - asdf
+  - asdf
+  - asdf
+
+- prepare_phrase_dataset.py # generates the phrase datasets from the .krn
+
+$ python3 prepare_phrase_dataset.py ../Utilities/beethoven_quartets/krn
+
+- train_phrase_transformer.py # uses the datasets for training
+
+$ python3 train_phrase_transformer.py phrase_dataset_long.json
+
+- generate_phrase.py # uses the trained model for phrase generation
+
+$ python3 generate_phrase.py phrase_dataset_long.json 32  
+
+  
