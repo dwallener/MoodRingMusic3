@@ -1,9 +1,8 @@
 # MoodRingMusic3
 
-'''
-📚 Project Structure
-TinyTran/
-├── extract_phrases_for_training.py
+> 📚 Project Structure
+> TinyTran/
+> ├── extract_phrases_for_training.py
 ├── train_phrase_transformer.py
 ├── generate_phrase.py
 ├── orchestration_composition_music21.py
