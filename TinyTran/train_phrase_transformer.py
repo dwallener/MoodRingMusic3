@@ -1,100 +1,100 @@
+import json
 import torch
 import torch.nn as nn
+from torch.utils.data import DataLoader, Dataset
 import torch.optim as optim
-import random
-import pickle
 
-# Constants
-VOCAB_SIZE = 25 * len([0.25, 0.5, 1.0, 2.0, 4.0])  # (Interval -12 to +12) * 5 duration buckets = 125
-EMBED_DIM = 128
-NUM_HEADS = 4
-NUM_LAYERS = 2
-BATCH_SIZE = 32
-EPOCHS = 50
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# ----- Dataset Loader -----
+class PhraseDataset(Dataset):
+    def __init__(self, json_path):
+        with open(json_path, "r") as f:
+            self.phrases = json.load(f)
 
-# ---------------------------
-# Model Definition
-# ---------------------------
-class PhraseTransformer(nn.Module):
-    def __init__(self, vocab_size, embed_dim):
-        super(PhraseTransformer, self).__init__()
-        self.embedding = nn.Embedding(vocab_size, embed_dim)
-        encoder_layer = nn.TransformerEncoderLayer(d_model=embed_dim, nhead=NUM_HEADS)
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=NUM_LAYERS)
-        self.fc_out = nn.Linear(embed_dim, vocab_size)
+        tokens = {token for phrase in self.phrases for token in phrase}
+        self.vocab = {token: idx + 1 for idx, token in enumerate(sorted(tokens))}
+        self.vocab["<PAD>"] = 0
+        self.inv_vocab = {idx: token for token, idx in self.vocab.items()}
+
+    def __len__(self):
+        return len(self.phrases)
+
+    def __getitem__(self, idx):
+        phrase = self.phrases[idx]
+        token_ids = [self.vocab[token] for token in phrase]
+        return torch.tensor(token_ids, dtype=torch.long)
+
+    def get_vocab_size(self):
+        return len(self.vocab)
+
+def collate_fn(batch):
+    return nn.utils.rnn.pad_sequence(batch, batch_first=True, padding_value=0)
+
+# ----- Tiny Transformer -----
+class TinyTransformer(nn.Module):
+    def __init__(self, vocab_size, d_model=128, nhead=4, num_layers=2, dropout=0.1):
+        super().__init__()
+        self.embed = nn.Embedding(vocab_size, d_model, padding_idx=0)
+        encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=nhead, dropout=dropout)
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        self.fc_out = nn.Linear(d_model, vocab_size)
 
     def forward(self, x):
-        emb = self.embedding(x)  # Shape: [seq_len, batch, embed_dim]
+        emb = self.embed(x)  # (B, T, D)
+        emb = emb.permute(1, 0, 2)  # (T, B, D) for Transformer
         out = self.transformer(emb)
-        logits = self.fc_out(out)
+        out = out.permute(1, 0, 2)  # (B, T, D)
+        logits = self.fc_out(out)   # (B, T, Vocab_Size)
         return logits
 
-# ---------------------------
-# Dataset Preparation
-# ---------------------------
-def load_dataset(file_path):
-    with open(file_path, "rb") as f:
-        phrases = pickle.load(f)
-    return phrases
+# ----- Training Function -----
+def train_model(json_file, num_epochs=20, batch_size=32, lr=1e-3):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-def generate_batches(phrases, batch_size):
-    while True:
-        batch = random.sample(phrases, batch_size)
-        inputs = []
-        targets = []
-        for seq in batch:
-            if len(seq) < 2:
-                continue
-            input_seq = seq[:-1]
-            target_seq = seq[1:]
-            inputs.append(torch.tensor(input_seq, dtype=torch.long))
-            targets.append(torch.tensor(target_seq, dtype=torch.long))
-        
-        if not inputs:
-            continue  # Skip empty batch
+    dataset = PhraseDataset(json_file)
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
+    vocab_size = dataset.get_vocab_size()
 
-        inputs_padded = nn.utils.rnn.pad_sequence(inputs, batch_first=False)
-        targets_padded = nn.utils.rnn.pad_sequence(targets, batch_first=False)
-        yield inputs_padded.to(DEVICE), targets_padded.to(DEVICE)
+    model = TinyTransformer(vocab_size).to(device)
+    optimizer = optim.Adam(model.parameters(), lr=lr)
+    criterion = nn.CrossEntropyLoss(ignore_index=0)  # Ignore PAD token
 
-# ---------------------------
-# Training Loop
-# ---------------------------
-def train_model(phrases, output_model_file):
-    model = PhraseTransformer(VOCAB_SIZE, EMBED_DIM).to(DEVICE)
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
-    criterion = nn.CrossEntropyLoss()
-
-    batch_generator = generate_batches(phrases, BATCH_SIZE)
-
-    for epoch in range(1, EPOCHS + 1):
+    for epoch in range(1, num_epochs + 1):
         model.train()
-        inputs, targets = next(batch_generator)
-        optimizer.zero_grad()
-        outputs = model(inputs)
+        total_loss = 0
 
-        # Reshape for loss: (seq_len * batch_size, vocab_size)
-        loss = criterion(outputs.view(-1, VOCAB_SIZE), targets.view(-1))
-        loss.backward()
-        optimizer.step()
+        for batch in dataloader:
+            batch = batch.to(device)
+            inputs = batch[:, :-1]
+            targets = batch[:, 1:]
 
-        if epoch % 5 == 0:
-            print(f"Epoch {epoch}/{EPOCHS} - Loss: {loss.item():.4f}")
+            logits = model(inputs)
+            logits = logits.reshape(-1, vocab_size)
+            targets = targets.reshape(-1)
 
-    # Save final model
-    torch.save(model.state_dict(), output_model_file)
-    print(f"Model saved to {output_model_file}")
+            loss = criterion(logits, targets)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
 
-# ---------------------------
-# Main Execution
-# ---------------------------
+            total_loss += loss.item()
+
+        avg_loss = total_loss / len(dataloader)
+        print(f"Epoch {epoch}/{num_epochs} - Loss: {avg_loss:.4f}")
+
+    # Save model state
+    torch.save(model.state_dict(), "tiny_transformer_phrase_dataset_long.json.pt")
+
+    # Save vocab mappings
+    with open("tiny_transformer_phrase_dataset_long.vocab.json", "w") as f:
+        json.dump({
+            "token_to_idx": dataset.vocab, 
+            "idx_to_token": dataset.inv_vocab}, f)
+
+    print("Model and vocab saved.")
+
 if __name__ == "__main__":
     import sys
-    if len(sys.argv) < 3:
-        print("Usage: python train_phrase_transformer.py <dataset_pickle> <output_model_file>")
+    if len(sys.argv) < 2:
+        print("Usage: python train_phrase_transformer.py <phrase_dataset.json>")
     else:
-        phrases = load_dataset(sys.argv[1])
-        train_model(phrases, sys.argv[2])
-
-
+        train_model(sys.argv[1])
