@@ -1,6 +1,6 @@
 # MoodRingMusic3
 
-'''
+```
 📚 Project Structure
 TinyTran/
 ├── extract_phrases_for_training.py
@@ -15,7 +15,7 @@ TinyTran/
 ├── tiny_transformer_phrase_dataset_medium.pt
 ├── tiny_transformer_phrase_dataset_long.pt
 └── ... (vocab files)
-'''
+```
 
 ## 🚀 Usage
 
