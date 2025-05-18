@@ -32,18 +32,18 @@ def load_model_and_vocab(model_file, vocab_file):
         vocab_data = json.load(f)
     token_to_idx = vocab_data["token_to_idx"]
     idx_to_token = {int(k): v for k, v in vocab_data["idx_to_token"].items()}
-    
+
     model = TinyTransformer(len(token_to_idx))
     model.load_state_dict(torch.load(model_file))
     model.eval()
     return model, token_to_idx, idx_to_token
 
-def generate_phrase(model, token_to_idx, idx_to_token, max_length):
+def generate_phrase(model, token_to_idx, idx_to_token, max_length, temperature=1.0):
     sequence = [random.choice(list(token_to_idx.values()))]
     for _ in range(max_length - 1):
         input_seq = torch.tensor(sequence).unsqueeze(0)
         logits = model(input_seq)
-        probs = torch.softmax(logits[0, -1], dim=0).detach().numpy()
+        probs = torch.softmax(logits[0, -1] / temperature, dim=0).detach().numpy()
         next_token = random.choices(range(len(probs)), weights=probs, k=1)[0]
         if next_token == 0:
             break
@@ -61,28 +61,45 @@ def choose_next_phrase(current_state, matrix):
     choices, weights = zip(*transitions.items())
     return random.choices(choices, weights=weights, k=1)[0]
 
+def transpose_pitch(pitch, target_key, mode):
+    key_offsets = {
+        "C": 0, "C#": 1, "D": 2, "D#": 3, "E": 4, "F": 5,
+        "F#": 6, "G": 7, "G#": 8, "A": 9, "A#": 10, "B": 11
+    }
+    offset = key_offsets.get(target_key.upper(), 0)
+    return pitch + offset
+
+def register_shift(pitch, register, instrument):
+    base_shifts = {"Cello": -24, "Viola": -12, "Violin1": 0, "Violin2": 0}
+    shift = base_shifts.get(instrument, 0)
+
+    if register == "low":
+        shift -= 12
+    elif register == "high":
+        shift += 12
+
+    return max(0, min(127, pitch + shift))
+
 # -----------------------
 # Orchestration Logic
 # -----------------------
-def orchestrate(output_file="composition_mido.mid", transition_matrix_file="cello_transition_matrix.json", total_phrases=32):
-    # Model and vocab files per instrument
-    instruments = {
-        "Cello": 42,    # MIDI Program: Acoustic Bass
-        "Viola": 41,    # MIDI Program: Violin (using as proxy for Viola)
-        "Violin1": 40,  # MIDI Program: Violin
-        "Violin2": 40
-    }
+def orchestrate(output_file="composition_mido.mid", 
+                transition_matrix_file="cello_transition_matrix.json", 
+                song_structure_file="song_structure.json"):
 
-    register_offsets = {
-        "Cello": -24,    # Two octaves down
-        "Viola": -12,    # One octave down
-        "Violin1": 0,    # No change
-        "Violin2": 0
+    instruments = {
+        "Cello": 32,    # Acoustic Bass
+        "Viola": 41,    # Violin patch for viola proxy
+        "Violin1": 40,  # Violin
+        "Violin2": 40
     }
 
     phrase_lengths = {"Short": 8, "Medium": 16, "Long": 32}
     ticks_per_beat = 480
     matrix = load_transition_matrix(transition_matrix_file)
+
+    with open(song_structure_file, "r") as f:
+        sections = json.load(f)
 
     mid = MidiFile(ticks_per_beat=ticks_per_beat)
     tempo = mido.bpm2tempo(120)
@@ -94,33 +111,54 @@ def orchestrate(output_file="composition_mido.mid", transition_matrix_file="cell
         track.append(MetaMessage('time_signature', numerator=4, denominator=4, time=0))
         track.append(Message('program_change', program=program, time=0))
 
-        current_state = "Short"
-        time_cursor = 0
+        for section in sections:
+            bars_remaining = section["length_bars"]
+            temperature = section["temperature"]
+            register = section["register"]
+            key = section["key"]
+            mode = section["mode"]
 
-        for _ in range(total_phrases):
-            phrase_type = choose_next_phrase(current_state, matrix)
-            current_state = phrase_type
+            current_state = "Short"
+            time_cursor = 0
 
-            if phrase_type == "Silent":
-                rest_ticks = 4 * ticks_per_beat
-                track.append(Message('note_off', time=rest_ticks))
-                continue
+            while bars_remaining > 0:
+                phrase_type = choose_next_phrase(current_state, matrix)
+                current_state = phrase_type
 
-            model_prefix = f"{track_name.lower()}_{phrase_type.lower()}"
-            model_file = f"{model_prefix}.model.pt"
-            vocab_file = f"{model_prefix}.vocab.json"
+                if phrase_type == "Silent":
+                    rest_ticks = 4 * ticks_per_beat
+                    track.append(Message('note_off', time=rest_ticks))
+                    bars_remaining -= 1
+                    continue
 
-            model, token_to_idx, idx_to_token = load_model_and_vocab(model_file, vocab_file)
-            tokens = generate_phrase(model, token_to_idx, idx_to_token, max_length=phrase_lengths[phrase_type])
+                model_prefix = f"{track_name.lower()}_{phrase_type.lower()}"
+                model_file = f"{model_prefix}.model.pt"
+                vocab_file = f"{model_prefix}.vocab.json"
 
-            for token in tokens:
-                #pitch_midi, dur_sixteenths = map(int, token.split("_"))
-                pitch_midi, dur_sixteenths = map(int, token.split("_"))
-                pitch_midi += register_offsets[track_name]  # Shift pitch based on instrument
-                duration = dur_sixteenths * int(ticks_per_beat / 4)
-                track.append(Message('note_on', note=pitch_midi, velocity=64, time=time_cursor))
-                track.append(Message('note_off', note=pitch_midi, velocity=64, time=duration))
-                time_cursor = 0
+                model, token_to_idx, idx_to_token = load_model_and_vocab(model_file, vocab_file)
+                tokens = generate_phrase(model, token_to_idx, idx_to_token, 
+                                         max_length=phrase_lengths[phrase_type], 
+                                         temperature=temperature)
+
+                total_phrase_quarters = 0
+                for token in tokens:
+                    pitch_midi, dur_sixteenths = map(int, token.split("_"))
+                    pitch_midi = transpose_pitch(pitch_midi, key, mode)
+                    pitch_midi = register_shift(pitch_midi, register, track_name)
+                    duration = dur_sixteenths * int(ticks_per_beat / 4)
+
+                    track.append(Message('note_on', note=pitch_midi, velocity=64, time=time_cursor))
+                    track.append(Message('note_off', note=pitch_midi, velocity=64, time=duration))
+
+                    time_cursor = 0
+                    total_phrase_quarters += dur_sixteenths / 4
+
+                bars_remaining -= total_phrase_quarters / 4
+                # Pad with rest if overshoot
+                if bars_remaining < 0:
+                    overshoot_ticks = int(abs(bars_remaining) * 4 * ticks_per_beat)
+                    track.append(Message('note_off', time=overshoot_ticks))
+                    bars_remaining = 0
 
     mid.save(output_file)
     print(f"MIDI composition exported to {output_file}")
