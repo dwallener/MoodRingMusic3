@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
 import torch.optim as optim
+import argparse
 
 # ----- Dataset Loader -----
 class PhraseDataset(Dataset):
@@ -46,8 +47,8 @@ class TinyTransformer(nn.Module):
         logits = self.fc_out(out)   # (B, T, Vocab_Size)
         return logits
 
-# ----- Training Function -----
-def train_model(json_file, num_epochs=20, batch_size=32, lr=1e-3):
+# ----- Training Function ------
+def train_model(json_file, num_epochs=20, batch_size=32, lr=1e-3, model_out="model.pt", vocab_out="vocab.json"):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     dataset = PhraseDataset(json_file)
@@ -82,10 +83,10 @@ def train_model(json_file, num_epochs=20, batch_size=32, lr=1e-3):
         print(f"Epoch {epoch}/{num_epochs} - Loss: {avg_loss:.4f}")
 
     # Save model state
-    torch.save(model.state_dict(), "tiny_transformer_phrase_dataset_long.json.pt")
+    torch.save(model.state_dict(), model_out)
 
     # Save vocab mappings
-    with open("tiny_transformer_phrase_dataset_long.vocab.json", "w") as f:
+    with open(vocab_out, "w") as f:
         json.dump({
             "token_to_idx": dataset.vocab, 
             "idx_to_token": dataset.inv_vocab}, f)
@@ -93,8 +94,11 @@ def train_model(json_file, num_epochs=20, batch_size=32, lr=1e-3):
     print("Model and vocab saved.")
 
 if __name__ == "__main__":
-    import sys
-    if len(sys.argv) < 2:
-        print("Usage: python train_phrase_transformer.py <phrase_dataset.json>")
-    else:
-        train_model(sys.argv[1])
+    parser = argparse.ArgumentParser(description="Train Tiny Transformer for Phrase Generation")
+    parser.add_argument("dataset", help="Path to the phrase dataset JSON file")
+    parser.add_argument("--model_out", default="default_phrase_model.pt", help="Output path for model .pt file")
+    parser.add_argument("--vocab_out", default="default_phrase_vocab.json", help="Output path for vocab JSON file")
+
+    args = parser.parse_args()
+
+    train_model(args.dataset, model_out=args.model_out, vocab_out=args.vocab_out)
