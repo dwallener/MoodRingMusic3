@@ -5,6 +5,32 @@ import random
 import mido
 from mido import MidiFile, MidiTrack, Message, MetaMessage
 
+# Setting up for mood-based key transposition
+KEY_MAP = {
+    "Focus": ["C", "A", "F"],
+    "Relax": ["F", "Eb", "Bb"],
+    "Energy": ["G", "D", "E"],
+    "Sleep": ["A Minor", "C Minor", "G Minor"],
+    "Creative Flow": ["E", "G", "D"],
+    "Calm Confidence": ["C", "F", "Bb"],
+    "Romantic": ["Bb", "D minor", "A Minor"],
+    "Reflective": ["C Minor", "D Minor", "Eb", "G Minor"]
+}
+
+key_offsets = {"C": 0, "C#": 1, "D": 2, "D#": 3, "E": 4, "F": 5, "F#": 6, "G": 7, "G#": 8, "A": 9, "A#": 10, "B": 11}
+
+def select_starting_key(mood):
+    possible_keys = KEY_MAP.get(mood, ["C"])  # Default to C if mood not found
+    return random.choice(possible_keys)
+
+def calculate_transposition_offset(starting_key):
+    key_offsets = {
+        "C": 0, "C#": 1, "D": 2, "Eb": 3, "E": 4, "F": 5,
+        "F#": 6, "G": 7, "Ab": 8, "A": 9, "Bb": 10, "B": 11
+    }
+    return key_offsets.get(starting_key, 0)
+
+
 # -----------------------
 # Tiny Transformer Model
 # -----------------------
@@ -91,8 +117,6 @@ def clamp_pitch_octave_up(pitch, instrument):
 def get_allowed_pitches(key, mode):
     major_scale = [0, 2, 4, 5, 7, 9, 11]
     minor_scale = [0, 2, 3, 5, 7, 8, 10]
-    key_offsets = {"C": 0, "C#": 1, "D": 2, "D#": 3, "E": 4, "F": 5,
-                   "F#": 6, "G": 7, "G#": 8, "A": 9, "A#": 10, "B": 11}
     base_offset = key_offsets.get(key.upper(), 0)
     scale = major_scale if mode.lower() == "major" else minor_scale
     return [(note + base_offset) % 12 for note in scale]
@@ -100,12 +124,29 @@ def get_allowed_pitches(key, mode):
 def infer_chord(bass_notes):
     return max(set(bass_notes), key=bass_notes.count) if bass_notes else 60  # Default C if none
 
+def display_composition_settings(mood, starting_key, resolved_sections):
+    print("\n🎼 Composition Settings:")
+    print(f"- Mood: {mood}")
+    print(f"- Starting Key: {starting_key}\n")
+    print("📖 Section Key Resolutions:")
+    for section_name, key in resolved_sections.items():
+        print(f"- {section_name}: {key}")
+    print("\n" + "-" * 40 + "\n")
+
+
 # -----------------------
 # Orchestration Logic
 # -----------------------
 def orchestrate(output_file="composition_mido.mid",
                 transition_matrix_file="cello_transition_matrix.json",
-                song_structure_file="song_structure.json"):
+                song_structure_file="song_structure.json",
+                mood="Romantic"):
+
+    starting_key = select_starting_key(mood)
+    transposition_offset = calculate_transposition_offset(starting_key)
+    print(f"🎵 Selected Mood: {mood}")
+    print(f"🎶 Starting Key: {starting_key} (Offset: {transposition_offset} semitones)")
+
 
     instruments = {
         "Cello": 32,
@@ -142,6 +183,14 @@ def orchestrate(output_file="composition_mido.mid",
             temperature = section["temperature"]
             register = section["register"]
             key = section["key"]
+
+            # shift to mood-based key
+            resolved_key_offset = calculate_transposition_offset(section["key"]) + transposition_offset
+            resolved_key_offset = resolved_key_offset % 12  # Wrap around
+            resolved_key_name = [k for k, v in key_offsets.items() if v == resolved_key_offset][0]
+
+            print(f"→ Section: {section['section']}, Key: {resolved_key_name}, Mode: {section['mode']}, Tempo Factor: {section['temperature']}")
+
             mode = section["mode"]
             allowed_pitches = get_allowed_pitches(key, mode)
 
@@ -174,7 +223,8 @@ def orchestrate(output_file="composition_mido.mid",
                 total_phrase_quarters = 0
                 for token in tokens:
                     pitch_midi, dur_sixteenths = map(int, token.split("_"))
-                    pitch_midi = transpose_pitch(pitch_midi, key, mode)
+                    #pitch_midi = transpose_pitch(pitch_midi, key, mode)
+                    pitch_midi = transpose_pitch(pitch_midi, resolved_key_name, mode)
                     pitch_class = pitch_midi % 12
 
                     # Enforce staying in key
