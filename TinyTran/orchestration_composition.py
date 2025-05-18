@@ -80,6 +80,46 @@ def register_shift(pitch, register, instrument):
 
     return max(0, min(127, pitch + shift))
 
+def infer_chord(bass_notes):
+    if not bass_notes:
+        return 60  # Default to C if no bass notes found
+    # Take the most frequent note as root
+    root_note = max(set(bass_notes), key=bass_notes.count)
+    return root_note
+
+instrument_ranges = {
+    "Cello": (36, 60),    # C2 to C4
+    "Viola": (48, 72),    # C3 to C5
+    "Violin1": (55, 84),  # G3 to C6
+    "Violin2": (55, 84),  # Same as Violin1
+}
+
+
+def clamp_pitch_octave_up(pitch, instrument):
+    min_pitch, max_pitch = instrument_ranges.get(instrument, (0, 127))
+    while pitch < min_pitch:
+        pitch += 12  # Transpose up an octave
+    while pitch > max_pitch:
+        pitch -= 12  # Transpose down an octave if too high
+    return max(min_pitch, min(max_pitch, pitch))  # Final safety clamp
+
+
+def get_allowed_pitches(key, mode):
+    # Basic major and minor scales relative to C
+    major_scale = [0, 2, 4, 5, 7, 9, 11]
+    minor_scale = [0, 2, 3, 5, 7, 8, 10]
+
+    key_offsets = {
+        "C": 0, "C#": 1, "D": 2, "D#": 3, "E": 4, "F": 5,
+        "F#": 6, "G": 7, "G#": 8, "A": 9, "A#": 10, "B": 11
+    }
+
+    base_offset = key_offsets.get(key.upper(), 0)
+    scale = major_scale if mode.lower() == "major" else minor_scale
+
+    return [(note + base_offset) % 12 for note in scale]
+
+
 # -----------------------
 # Orchestration Logic
 # -----------------------
@@ -104,6 +144,10 @@ def orchestrate(output_file="composition_mido.mid",
     mid = MidiFile(ticks_per_beat=ticks_per_beat)
     tempo = mido.bpm2tempo(120)
 
+    bass_notes_by_measure = []
+    current_measure_notes = []
+    ticks_accumulated = 0
+
     for track_name, program in instruments.items():
         track = MidiTrack()
         mid.tracks.append(track)
@@ -117,6 +161,7 @@ def orchestrate(output_file="composition_mido.mid",
             register = section["register"]
             key = section["key"]
             mode = section["mode"]
+            allowed_pitches = get_allowed_pitches(key, mode)
 
             current_state = "Short"
             time_cursor = 0
@@ -143,8 +188,22 @@ def orchestrate(output_file="composition_mido.mid",
                 total_phrase_quarters = 0
                 for token in tokens:
                     pitch_midi, dur_sixteenths = map(int, token.split("_"))
+
+                    # Let's stay in key
+                    pitch_class = pitch_midi % 12
+
+                    if pitch_class not in allowed_pitches:
+                        # Fast note (sixteenth or shorter), skip disallowed notes
+                        if dur_sixteenths <= 2:
+                            continue
+                        # Longer note, allow out-of-key with low probability
+                        if random.random() > 0.1:
+                            continue
+
+                    # we need to clamp to reasonable instrument ranges
                     pitch_midi = transpose_pitch(pitch_midi, key, mode)
                     pitch_midi = register_shift(pitch_midi, register, track_name)
+                    pitch_midi = clamp_pitch_octave_up(pitch_midi, track_name)
                     duration = dur_sixteenths * int(ticks_per_beat / 4)
 
                     track.append(Message('note_on', note=pitch_midi, velocity=64, time=time_cursor))
@@ -152,6 +211,13 @@ def orchestrate(output_file="composition_mido.mid",
 
                     time_cursor = 0
                     total_phrase_quarters += dur_sixteenths / 4
+                    if track_name == "Cello":
+                        current_measure_notes.append(pitch_midi)
+                        ticks_accumulated += duration
+                        if ticks_accumulated >= 4 * ticks_per_beat:
+                            bass_notes_by_measure.append(current_measure_notes)
+                            current_measure_notes = []
+                            ticks_accumulated = 0
 
                 bars_remaining -= total_phrase_quarters / 4
                 # Pad with rest if overshoot
@@ -159,6 +225,27 @@ def orchestrate(output_file="composition_mido.mid",
                     overshoot_ticks = int(abs(bars_remaining) * 4 * ticks_per_beat)
                     track.append(Message('note_off', time=overshoot_ticks))
                     bars_remaining = 0
+
+    # -------------------------------
+    # Add Chord Marker Track (5th Track)
+    # -------------------------------
+    if current_measure_notes:
+        bass_notes_by_measure.append(current_measure_notes)
+
+    chord_track = MidiTrack()
+    mid.tracks.append(chord_track)
+    chord_track.append(MetaMessage('track_name', name="Chord Markers", time=0))
+    chord_track.append(MetaMessage('set_tempo', tempo=tempo, time=0))
+    chord_track.append(MetaMessage('time_signature', numerator=4, denominator=4, time=0))
+
+    marker_interval = 4 * ticks_per_beat
+    
+    for measure_notes in bass_notes_by_measure:
+        root_midi = infer_chord(measure_notes)
+        # Velocity 1 to keep it silent but visible in DAW
+        chord_track.append(Message('note_on', note=root_midi, velocity=1, time=0))
+        chord_track.append(Message('note_off', note=root_midi, velocity=1, time=marker_interval))
+
 
     mid.save(output_file)
     print(f"MIDI composition exported to {output_file}")
