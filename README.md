@@ -23,7 +23,11 @@ TinyTran/
 
 Extract phrases from .krn files and split them into datasets:
 
-> python extract_phrases_for_training.py /path/to/krn/folder
+> python prepare_phrase_dataset.py /path/to/krn/folder <cello | viola | violin1 | violin2>
+>
+# 1a TBD - Transition Matrix Generation
+
+Tbd.
 
 # 2. Train Models
 
