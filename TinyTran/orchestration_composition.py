@@ -17,12 +17,9 @@ class TinyTransformer(nn.Module):
         self.fc_out = nn.Linear(d_model, vocab_size)
 
     def forward(self, x):
-        emb = self.embed(x)
-        emb = emb.permute(1, 0, 2)
-        out = self.transformer(emb)
-        out = out.permute(1, 0, 2)
-        logits = self.fc_out(out)
-        return logits
+        emb = self.embed(x).permute(1, 0, 2)
+        out = self.transformer(emb).permute(1, 0, 2)
+        return self.fc_out(out)
 
 # -----------------------
 # Utility Functions
@@ -62,78 +59,60 @@ def choose_next_phrase(current_state, matrix):
     return random.choices(choices, weights=weights, k=1)[0]
 
 def transpose_pitch(pitch, target_key, mode):
-    key_offsets = {
-        "C": 0, "C#": 1, "D": 2, "D#": 3, "E": 4, "F": 5,
-        "F#": 6, "G": 7, "G#": 8, "A": 9, "A#": 10, "B": 11
-    }
+    key_offsets = {"C": 0, "C#": 1, "D": 2, "D#": 3, "E": 4, "F": 5,
+                   "F#": 6, "G": 7, "G#": 8, "A": 9, "A#": 10, "B": 11}
     offset = key_offsets.get(target_key.upper(), 0)
     return pitch + offset
 
 def register_shift(pitch, register, instrument):
     base_shifts = {"Cello": -24, "Viola": -12, "Violin1": 0, "Violin2": 0}
     shift = base_shifts.get(instrument, 0)
-
     if register == "low":
         shift -= 12
     elif register == "high":
         shift += 12
-
     return max(0, min(127, pitch + shift))
-
-def infer_chord(bass_notes):
-    if not bass_notes:
-        return 60  # Default to C if no bass notes found
-    # Take the most frequent note as root
-    root_note = max(set(bass_notes), key=bass_notes.count)
-    return root_note
 
 instrument_ranges = {
     "Cello": (36, 60),    # C2 to C4
     "Viola": (48, 72),    # C3 to C5
     "Violin1": (55, 84),  # G3 to C6
-    "Violin2": (55, 84),  # Same as Violin1
+    "Violin2": (55, 84),
 }
-
 
 def clamp_pitch_octave_up(pitch, instrument):
     min_pitch, max_pitch = instrument_ranges.get(instrument, (0, 127))
     while pitch < min_pitch:
-        pitch += 12  # Transpose up an octave
+        pitch += 12
     while pitch > max_pitch:
-        pitch -= 12  # Transpose down an octave if too high
-    return max(min_pitch, min(max_pitch, pitch))  # Final safety clamp
-
+        pitch -= 12
+    return max(min_pitch, min(max_pitch, pitch))
 
 def get_allowed_pitches(key, mode):
-    # Basic major and minor scales relative to C
     major_scale = [0, 2, 4, 5, 7, 9, 11]
     minor_scale = [0, 2, 3, 5, 7, 8, 10]
-
-    key_offsets = {
-        "C": 0, "C#": 1, "D": 2, "D#": 3, "E": 4, "F": 5,
-        "F#": 6, "G": 7, "G#": 8, "A": 9, "A#": 10, "B": 11
-    }
-
+    key_offsets = {"C": 0, "C#": 1, "D": 2, "D#": 3, "E": 4, "F": 5,
+                   "F#": 6, "G": 7, "G#": 8, "A": 9, "A#": 10, "B": 11}
     base_offset = key_offsets.get(key.upper(), 0)
     scale = major_scale if mode.lower() == "major" else minor_scale
-
     return [(note + base_offset) % 12 for note in scale]
 
+def infer_chord(bass_notes):
+    return max(set(bass_notes), key=bass_notes.count) if bass_notes else 60  # Default C if none
 
 # -----------------------
 # Orchestration Logic
 # -----------------------
-def orchestrate(output_file="composition_mido.mid", 
-                transition_matrix_file="cello_transition_matrix.json", 
+def orchestrate(output_file="composition_mido.mid",
+                transition_matrix_file="cello_transition_matrix.json",
                 song_structure_file="song_structure.json"):
 
     instruments = {
-        "Cello": 32,    # Acoustic Bass
-        "Viola": 41,    # Violin patch for viola proxy
-        "Violin1": 40,  # Violin
+        "Cello": 32,
+        "Viola": 41,
+        "Violin1": 40,
         "Violin2": 40
     }
-
     phrase_lengths = {"Short": 8, "Medium": 16, "Long": 32}
     ticks_per_beat = 480
     matrix = load_transition_matrix(transition_matrix_file)
@@ -141,9 +120,12 @@ def orchestrate(output_file="composition_mido.mid",
     with open(song_structure_file, "r") as f:
         sections = json.load(f)
 
-    mid = MidiFile(ticks_per_beat=ticks_per_beat)
-    tempo = mido.bpm2tempo(120)
+    tempo_bpm = 120
+    if "tempo" in sections[0]:
+        tempo_bpm = sections[0]["tempo"]
+    tempo = mido.bpm2tempo(tempo_bpm)
 
+    mid = MidiFile(ticks_per_beat=ticks_per_beat)
     bass_notes_by_measure = []
     current_measure_notes = []
     ticks_accumulated = 0
@@ -166,6 +148,10 @@ def orchestrate(output_file="composition_mido.mid",
             current_state = "Short"
             time_cursor = 0
 
+            print(f"\n--- Generating Section: {section.get('section', 'Unnamed')} ---")
+            print(f"Key: {key} {mode.capitalize()} | Tempo: {tempo_bpm} BPM | Register: {register} | Temperature: {temperature}")
+            print(f"Bars: {section['length_bars']}")
+
             while bars_remaining > 0:
                 phrase_type = choose_next_phrase(current_state, matrix)
                 current_state = phrase_type
@@ -181,27 +167,23 @@ def orchestrate(output_file="composition_mido.mid",
                 vocab_file = f"{model_prefix}.vocab.json"
 
                 model, token_to_idx, idx_to_token = load_model_and_vocab(model_file, vocab_file)
-                tokens = generate_phrase(model, token_to_idx, idx_to_token, 
-                                         max_length=phrase_lengths[phrase_type], 
+                tokens = generate_phrase(model, token_to_idx, idx_to_token,
+                                         max_length=phrase_lengths[phrase_type],
                                          temperature=temperature)
 
                 total_phrase_quarters = 0
                 for token in tokens:
                     pitch_midi, dur_sixteenths = map(int, token.split("_"))
-
-                    # Let's stay in key
+                    pitch_midi = transpose_pitch(pitch_midi, key, mode)
                     pitch_class = pitch_midi % 12
 
+                    # Enforce staying in key
                     if pitch_class not in allowed_pitches:
-                        # Fast note (sixteenth or shorter), skip disallowed notes
                         if dur_sixteenths <= 2:
-                            continue
-                        # Longer note, allow out-of-key with low probability
+                            continue  # Skip short wrong notes
                         if random.random() > 0.1:
-                            continue
+                            continue  # Allow rare wrong notes
 
-                    # we need to clamp to reasonable instrument ranges
-                    pitch_midi = transpose_pitch(pitch_midi, key, mode)
                     pitch_midi = register_shift(pitch_midi, register, track_name)
                     pitch_midi = clamp_pitch_octave_up(pitch_midi, track_name)
                     duration = dur_sixteenths * int(ticks_per_beat / 4)
@@ -211,6 +193,7 @@ def orchestrate(output_file="composition_mido.mid",
 
                     time_cursor = 0
                     total_phrase_quarters += dur_sixteenths / 4
+
                     if track_name == "Cello":
                         current_measure_notes.append(pitch_midi)
                         ticks_accumulated += duration
@@ -220,18 +203,15 @@ def orchestrate(output_file="composition_mido.mid",
                             ticks_accumulated = 0
 
                 bars_remaining -= total_phrase_quarters / 4
-                # Pad with rest if overshoot
                 if bars_remaining < 0:
                     overshoot_ticks = int(abs(bars_remaining) * 4 * ticks_per_beat)
                     track.append(Message('note_off', time=overshoot_ticks))
                     bars_remaining = 0
 
-    # -------------------------------
-    # Add Chord Marker Track (5th Track)
-    # -------------------------------
     if current_measure_notes:
         bass_notes_by_measure.append(current_measure_notes)
 
+    # Add Chord Marker Track
     chord_track = MidiTrack()
     mid.tracks.append(chord_track)
     chord_track.append(MetaMessage('track_name', name="Chord Markers", time=0))
@@ -239,19 +219,17 @@ def orchestrate(output_file="composition_mido.mid",
     chord_track.append(MetaMessage('time_signature', numerator=4, denominator=4, time=0))
 
     marker_interval = 4 * ticks_per_beat
-    
     for measure_notes in bass_notes_by_measure:
         root_midi = infer_chord(measure_notes)
-        # Velocity 1 to keep it silent but visible in DAW
         chord_track.append(Message('note_on', note=root_midi, velocity=1, time=0))
         chord_track.append(Message('note_off', note=root_midi, velocity=1, time=marker_interval))
-
 
     mid.save(output_file)
     print(f"MIDI composition exported to {output_file}")
 
 # -----------------------
-# Run Example
+# Run
 # -----------------------
 if __name__ == "__main__":
     orchestrate()
+
