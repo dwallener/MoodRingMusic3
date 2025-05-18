@@ -3,34 +3,33 @@ import os
 import sys
 import json
 
-# Thresholds
+# Thresholds for phrase boundaries
 REST_THRESHOLD = 0.5
 HOLD_THRESHOLD = 1.0
-SILENCE_THRESHOLD = 1.0
 
-def classify_phrase_length(length):
-    if length <= 8:
-        return "Short"
-    elif length <= 24:
-        return "Medium"
-    else:
-        return "Long"
+PART_INDEX = {
+    "cello": 0,
+    "viola": 1,
+    "violin1": 2,
+    "violin2": 3
+}
 
-def extract_phrases(file_path):
+def extract_phrases(file_path, instrument_role):
     score = music21.converter.parse(file_path)
-    violin_parts = [p for p in score.parts if any("Violin" in str(inst) for inst in p.getInstruments())]
 
-    if not violin_parts or len(violin_parts) < 2:
+    try:
+        target_index = PART_INDEX[instrument_role.lower()]
+        part = score.parts[target_index]
+    except (KeyError, IndexError):
+        print(f"[Warning] Instrument role '{instrument_role}' not found or invalid in file {file_path}. Skipping.")
         return []
 
-    violin2 = violin_parts[1]
     phrases = []
     current_phrase = []
 
-    for n in violin2.flat.notesAndRests:
+    for n in part.flat.notesAndRests:
         if isinstance(n, music21.note.Rest):
-            rest_length = n.quarterLength
-            if rest_length >= REST_THRESHOLD * get_measure_length(n):
+            if n.quarterLength >= REST_THRESHOLD * get_measure_length(n):
                 if current_phrase:
                     phrases.append(current_phrase)
                     current_phrase = []
@@ -48,27 +47,24 @@ def get_measure_length(element):
     measure = element.getContextByClass('Measure')
     if measure and measure.timeSignature:
         return measure.timeSignature.barDuration.quarterLength
-    return 4.0  # Default to 4/4
+    return 4.0  # Default to 4/4 time if unknown
 
-def process_folder(folder_path):
-    datasets = {"Short": [], "Medium": [], "Long": []}
-
+def process_folder(folder_path, instrument_role):
+    all_phrases = []
     for file in os.listdir(folder_path):
         if file.endswith(".krn"):
-            phrases = extract_phrases(os.path.join(folder_path, file))
-            for phrase in phrases:
-                length = len(phrase)
-                class_label = classify_phrase_length(length)
-                datasets[class_label].append(phrase)
+            phrases = extract_phrases(os.path.join(folder_path, file), instrument_role)
+            all_phrases.extend(phrases)
 
-    for label in ["Short", "Medium", "Long"]:
-        filename = f"phrase_dataset_{label.lower()}.json"
-        with open(filename, "w") as f:
-            json.dump(datasets[label], f)
-        print(f"Saved {len(datasets[label])} {label} phrases to {filename}")
+    output_json = f"{instrument_role.lower()}_phrase_dataset.json"
+    with open(output_json, "w") as f:
+        json.dump(all_phrases, f)
+
+    print(f"Extracted {len(all_phrases)} phrases to {output_json}")
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python extract_phrases_for_training.py <krn_folder>")
+    if len(sys.argv) < 3:
+        print("Usage: python prepare_phrase_dataset.py <krn_folder> <instrument_role (cello|viola|violin1|violin2)>")
     else:
-        process_folder(sys.argv[1])
+        process_folder(sys.argv[1], sys.argv[2])
+        
