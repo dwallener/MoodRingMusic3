@@ -1,15 +1,12 @@
 import os
+import sys
 import json
 import random
-import sys
 import torch
 import torch.nn as nn
 import mido
 from mido import MidiFile, MidiTrack, Message, MetaMessage
 
-# -----------------------
-# Tiny Transformer Model
-# -----------------------
 class TinyTransformer(nn.Module):
     def __init__(self, vocab_size, d_model=128, nhead=4, num_layers=2, dropout=0.1):
         super().__init__()
@@ -24,9 +21,6 @@ class TinyTransformer(nn.Module):
         logits = self.fc_out(out)
         return logits
 
-# -----------------------
-# Utility Functions
-# -----------------------
 def load_model_and_vocab(model_file, vocab_file):
     with open(vocab_file, "r") as f:
         vocab_data = json.load(f)
@@ -43,34 +37,18 @@ def generate_phrase(model, token_to_idx, idx_to_token, max_length, temperature=1
     for _ in range(max_length - 1):
         input_seq = torch.tensor(sequence).unsqueeze(0)
         logits = model(input_seq)
-        probs = torch.softmax(logits[0, -1] / temperature, dim=0).detach().numpy()
-        next_token = random.choices(range(len(probs)), weights=probs, k=1)[0]
+        probs = torch.softmax(logits[0, -1] / temperature, dim=0).detach()
+        next_token = torch.multinomial(probs, 1).item()
         if next_token == 0:
             break
         sequence.append(next_token)
     return [idx_to_token[t] for t in sequence if t != 0]
 
-def infer_chord(bass_notes):
-    return max(set(bass_notes), key=bass_notes.count) if bass_notes else 60  # Default to C if no bass notes found
-
-def get_allowed_pitches(key, mode):
-    major_scale = [0, 2, 4, 5, 7, 9, 11]
-    minor_scale = [0, 2, 3, 5, 7, 8, 10]
-    key_offsets = {k: i for i, k in enumerate(["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"])}
-    base_offset = key_offsets.get(key.upper(), 0)
-    scale = major_scale if mode.lower() == "major" else minor_scale
-    return [(note + base_offset) % 12 for note in scale]
-
-def transpose_pitch(pitch, target_key, mode):
-    key_offsets = {k: i for i, k in enumerate(["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"])}
-    return pitch + key_offsets.get(target_key.upper(), 0)
-
-def orchestrate(model_folder, output_file="composition_mido.mid", song_structure_file="song_structure.json"):
+def orchestrate(model_folder, output_file="composition.mid", song_structure_file="song_structure.json"):
     ticks_per_beat = 480
     mid = MidiFile(ticks_per_beat=ticks_per_beat)
     tempo = mido.bpm2tempo(120)
 
-    # Auto-detect available spines from model folder
     models = {}
     for f in os.listdir(model_folder):
         if f.endswith(".model.pt"):
@@ -80,70 +58,99 @@ def orchestrate(model_folder, output_file="composition_mido.mid", song_structure
                 spine, length = parts
                 models.setdefault(spine, {})[length] = base
 
-    spine_names = sorted(models.keys())
-    print(f"[Info] Detected Spines: {spine_names}")
-
-    # Load song structure
     with open(song_structure_file, "r") as f:
         sections = json.load(f)
 
-    # Track per spine
-    for spine in spine_names:
-        track = MidiTrack()
-        mid.tracks.append(track)
-        track.append(MetaMessage('set_tempo', tempo=tempo, time=0))
-        track.append(MetaMessage('time_signature', numerator=4, denominator=4, time=0))
-        track.append(Message('program_change', program=40, time=0))  # Default Violin patch
+    model_cache = {}
+    global_time_cursor = 0
 
-        for section in sections:
-            bars_remaining = section["length_bars"]
-            temperature = section.get("temperature", 1.0)
-            key = section.get("key", "C")
-            mode = section.get("mode", "major")
-            allowed_pitches = get_allowed_pitches(key, mode)
-            time_cursor = 0
+    for section in sections:
+        bars = section["length_bars"]
+        section_ticks = bars * 4 * ticks_per_beat
+        active_spines = section.get("active_spines", list(models.keys()))
+        temperature = section.get("temperature", 1.0)
 
-            while bars_remaining > 0:
-                # Randomly choose available length for this spine
+        for spine in active_spines:
+            track = MidiTrack()
+            mid.tracks.append(track)
+            track.append(MetaMessage('set_tempo', tempo=tempo, time=0))
+            track.append(MetaMessage('time_signature', numerator=4, denominator=4, time=0))
+            track.append(Message('program_change', program=40, time=0))
+
+            current_ticks = 0
+            attempt_counter = 0
+            MAX_ATTEMPTS = 100
+
+            first_event = True
+            while current_ticks < section_ticks and attempt_counter < MAX_ATTEMPTS:
+                remaining_ticks = section_ticks - current_ticks
                 available_lengths = list(models[spine].keys())
                 phrase_length = random.choice(available_lengths)
-                model_base = models[spine][phrase_length]
-                
-                model_file = os.path.join(model_folder, f"{model_base}.model.pt")
-                vocab_file = os.path.join(model_folder, f"{model_base}.vocab.json")
-                
-                model, token_to_idx, idx_to_token = load_model_and_vocab(model_file, vocab_file)
+
+                model_key = (spine, phrase_length)
+                if model_key in model_cache:
+                    model, token_to_idx, idx_to_token = model_cache[model_key]
+                else:
+                    model_base = models[spine][phrase_length]
+                    model_file = os.path.join(model_folder, f"{model_base}.model.pt")
+                    vocab_file = os.path.join(model_folder, f"{model_base}.vocab.json")
+                    model, token_to_idx, idx_to_token = load_model_and_vocab(model_file, vocab_file)
+                    model_cache[model_key] = (model, token_to_idx, idx_to_token)
+
                 tokens = generate_phrase(model, token_to_idx, idx_to_token, max_length=32, temperature=temperature)
+                phrase_ticks = sum(int(token.split("_")[1]) * (ticks_per_beat // 4) for token in tokens if "_" in token)
 
+                if phrase_ticks == 0:
+                    attempt_counter += 1
+                    continue  # Try again
+
+                if phrase_ticks > remaining_ticks:
+                    truncated_tokens = []
+                    accumulated_ticks = 0
+                    for token in tokens:
+                        if "_" not in token:
+                            continue
+                        dur = int(token.split("_")[1]) * (ticks_per_beat // 4)
+                        if accumulated_ticks + dur > remaining_ticks:
+                            break
+                        truncated_tokens.append(token)
+                        accumulated_ticks += dur
+                    tokens = truncated_tokens
+                    phrase_ticks = accumulated_ticks
+
+                    if phrase_ticks == 0:
+                        attempt_counter += 1
+                        continue
+
+                local_time_cursor = 0
                 for token in tokens:
-                    if "_" not in token or token in ["=", "rest", "."]:
-                        continue  # Skip measure markers and rests
-
-                    try:
-                        pitch_midi, dur_sixteenths = map(int, token.split("_"))
-                    except ValueError:
-                        continue  # Skip malformed tokens safely
-
-                    if pitch_midi % 12 not in allowed_pitches:
-                        continue  # Skip out-of-key notes
-
-                    pitch_midi = transpose_pitch(pitch_midi, key, mode)
-                    duration = dur_sixteenths * int(ticks_per_beat / 4)
-                    track.append(Message('note_on', note=pitch_midi, velocity=64, time=time_cursor))
+                    if "_" not in token:
+                        continue
+                    pitch_midi, dur_sixteenths = map(int, token.split("_"))
+                    duration = dur_sixteenths * (ticks_per_beat // 4)
+                    if first_event:
+                        time_offset = global_time_cursor
+                        first_event = False
+                    else:
+                        time_offset = 0
+                    track.append(Message('note_on', note=pitch_midi, velocity=64, time=time_offset))
                     track.append(Message('note_off', note=pitch_midi, velocity=64, time=duration))
-                    time_cursor = 0
+                    local_time_cursor += duration
 
-                bars_remaining -= 2  # Rough estimate for each phrase
+                current_ticks += phrase_ticks
+                attempt_counter = 0  # Reset after successful addition
+
+        global_time_cursor += section_ticks
 
     mid.save(output_file)
     print(f"[Success] MIDI composition exported to {output_file}")
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python orchestrate_on_phrase_dataset.py <model_folder> [output_file]")
+        print("Usage: python orchestrate.py <model_folder> [output_file] [song_structure.json]")
     else:
         model_folder = sys.argv[1]
-        output_file = sys.argv[2] if len(sys.argv) > 2 else "composition_mido.mid"
-        orchestrate(model_folder, output_file)
-
-
+        output_file = sys.argv[2] if len(sys.argv) > 2 else "composition.mid"
+        song_structure_file = sys.argv[3] if len(sys.argv) > 3 else "song_structure.json"
+        orchestrate(model_folder, output_file, song_structure_file)
+        
