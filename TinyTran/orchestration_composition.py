@@ -137,7 +137,7 @@ def display_composition_settings(mood, starting_key, resolved_sections):
 # -----------------------
 # Orchestration Logic
 # -----------------------
-def orchestrate(output_file="composition_mido.mid",
+def orchestrate(output_file="mozart_composition_mido.mid",
                 transition_matrix_file="cello_transition_matrix.json",
                 song_structure_file="song_structure.json",
                 mood="Romantic"):
