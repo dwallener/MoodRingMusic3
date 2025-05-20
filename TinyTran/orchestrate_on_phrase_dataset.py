@@ -44,6 +44,289 @@ def generate_phrase(model, token_to_idx, idx_to_token, max_length, temperature=1
         sequence.append(next_token)
     return [idx_to_token[t] for t in sequence if t != 0]
 
+def diatonically_adjust_phrase(phrase_tokens, target_key, mode="major"):
+    # Define semitone offsets for major and minor scales
+    scale_degrees = {
+        "major": [0, 2, 4, 5, 7, 9, 11],  # Ionian
+        "minor": [0, 2, 3, 5, 7, 8, 10]   # Aeolian (Natural Minor)
+    }
+
+    if mode not in scale_degrees:
+        raise ValueError(f"Unsupported mode: {mode}")
+
+    # MIDI note numbers for C = 0, C# = 1, ..., B = 11
+    note_names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
+    key_base_note = note_names.index(target_key)
+
+    adjusted_tokens = []
+
+    for token in phrase_tokens:
+        if "_" not in token:
+            adjusted_tokens.append(token)
+            continue
+
+        pitch_midi, dur_sixteenths = map(int, token.split("_"))
+
+        # Calculate scale degree position
+        midi_note_in_octave = pitch_midi % 12
+        octave = pitch_midi // 12
+
+        # Find closest scale degree in target key
+        target_scale = [(key_base_note + interval) % 12 for interval in scale_degrees[mode]]
+
+        # Find the nearest note in the target scale
+        closest_note = min(target_scale, key=lambda n: abs(n - midi_note_in_octave))
+
+        # Recalculate adjusted pitch
+        adjusted_pitch = octave * 12 + closest_note
+
+        adjusted_tokens.append(f"{adjusted_pitch}_{dur_sixteenths}")
+
+    return adjusted_tokens
+
+
+def analyze_energy(mid, sections, ticks_per_beat=480):
+    section_starts = []
+    current_tick = 0
+    for section in sections:
+        bars = section["length_bars"]
+        section_starts.append((current_tick, section))
+        current_tick += bars * 4 * ticks_per_beat
+
+    print("\n[Energy Analysis]")
+    section_summaries = {}
+
+    for track_idx, track in enumerate(mid.tracks):
+        current_section_idx = 0
+        note_ons = {}
+        current_tick = 0
+
+        for msg in track:
+            current_tick += msg.time
+            while (current_section_idx + 1 < len(section_starts) and
+                   current_tick >= section_starts[current_section_idx + 1][0]):
+                current_section_idx += 1
+
+            section_start_tick, section = section_starts[current_section_idx]
+            section_name = section["section"]
+            target_energy = float(section.get("energy", 1.0))
+
+            if msg.type == 'note_on' and msg.velocity > 0:
+                note_ons.setdefault(section_name, 0)
+                note_ons[section_name] += 1
+                section_summaries.setdefault(section_name, []).append((track_idx, section.get("energy", 1.0)))
+
+        for section_name, total_note_ons in note_ons.items():
+            bars = next(sec["length_bars"] for sec in sections if sec["section"] == section_name)
+            measured_notes_per_measure = total_note_ons / bars
+            target_energy = next(sec.get("energy", 1.0) for sec in sections if sec["section"] == section_name)
+            target_notes_per_measure = target_energy * 8
+            print(f"  Track {track_idx:2d} | Section: {section_name:12s} | "
+                  f"Target: {target_notes_per_measure:5.1f} | "
+                  f"Measured: {measured_notes_per_measure:5.1f}")
+
+    # Output total per section
+    for section_name in section_summaries:
+        bars = next(sec["length_bars"] for sec in sections if sec["section"] == section_name)
+        target_energy = next(sec.get("energy", 1.0) for sec in sections if sec["section"] == section_name)
+        target_notes_per_measure = target_energy * 8
+
+        total_note_ons = 0
+        for track in mid.tracks:
+            current_tick = 0
+            section_start_tick = next(tick for tick, sec in section_starts if sec["section"] == section_name)
+            section_end_tick = section_start_tick + bars * 4 * ticks_per_beat
+
+            for msg in track:
+                current_tick += msg.time
+                if section_start_tick <= current_tick < section_end_tick:
+                    if msg.type == 'note_on' and msg.velocity > 0:
+                        total_note_ons += 1
+
+        measured_notes_per_measure = total_note_ons / bars
+        print(f"  >>> Total Energy for Section: {section_name:12s} | "
+              f"Target: {target_notes_per_measure:5.1f} | "
+              f"Measured: {measured_notes_per_measure:5.1f}\n")
+
+
+def apply_energy_envelope(mid, sections, ticks_per_beat=480):
+    # Precompute section start times in ticks
+    section_starts = []
+    current_tick = 0
+    for section in sections:
+        bars = section["length_bars"]
+        section_starts.append((current_tick, section))
+        current_tick += bars * 4 * ticks_per_beat
+
+    for track in mid.tracks:
+        new_messages = []
+        pending_delta = 0
+        current_tick = 0
+        current_section_idx = 0
+
+        for msg in track:
+            current_tick += msg.time
+
+            # Advance to the correct section based on current_tick
+            while (current_section_idx + 1 < len(section_starts) and
+                   current_tick >= section_starts[current_section_idx + 1][0]):
+                current_section_idx += 1
+
+            section_start_tick, section = section_starts[current_section_idx]
+            bars = section["length_bars"]
+            section_end_tick = section_start_tick + bars * 4 * ticks_per_beat
+            target_energy = section.get("energy", 1.0) * 8  # Target notes per measure
+
+            # Calculate measured energy within this section for this track
+            temp_tick = 0
+            section_note_count = 0
+            for m in track:
+                temp_tick += m.time
+                if section_start_tick <= temp_tick < section_end_tick:
+                    if m.type == 'note_on' and m.velocity > 0:
+                        section_note_count += 1
+
+            measured_energy = section_note_count / bars if bars else 0
+
+            # Apply the energy selection logic
+            keep = False
+            if measured_energy < 3:
+                keep = True
+            elif measured_energy <= target_energy * 1.25:
+                keep = True
+
+            in_current_section = section_start_tick <= current_tick < section_end_tick
+
+            if keep or not in_current_section:
+                # Keep this event, apply pending delta time
+                msg.time += pending_delta
+                new_messages.append(msg)
+                pending_delta = 0
+            else:
+                # Skip this event, accumulate its time
+                pending_delta += msg.time
+
+        # Replace track events
+        track.clear()
+        track.extend(new_messages)
+
+def select_tracks_for_energy(target_energy, tracks_with_energy):
+    """
+    Select tracks whose combined energy falls within ±25% of the target energy.
+    
+    Args:
+        target_energy (float): The target energy (notes per bar).
+        tracks_with_energy (list of tuples): List of (track_index, measured_energy) pairs.
+
+    Returns:
+        list of int: Selected track indices.
+    """
+    tracks_with_energy.sort(key=lambda x: -x[1])  # Sort tracks by highest energy first
+    selected_tracks = []
+    total_energy = 0
+    lower_bound = target_energy * 0.75
+    upper_bound = target_energy * 1.25
+
+    for track_idx, energy in tracks_with_energy:
+        selected_tracks.append(track_idx)
+        total_energy += energy
+        if lower_bound <= total_energy <= upper_bound:
+            break  # Target reached within acceptable window
+
+    return selected_tracks
+
+def analyze_energy_deltas(mid, sections, ticks_per_beat=480):
+    section_starts = []
+    current_tick = 0
+    for section in sections:
+        bars = section["length_bars"]
+        section_starts.append((current_tick, section))
+        current_tick += bars * 4 * ticks_per_beat
+
+    print("\n[Energy Delta Analysis]")
+    section_note_counts = {sec["section"]: 0 for sec in sections}
+
+    for track in mid.tracks:
+        current_tick = 0
+        current_section_idx = 0
+
+        for msg in track:
+            current_tick += msg.time
+            while (current_section_idx + 1 < len(section_starts) and
+                   current_tick >= section_starts[current_section_idx + 1][0]):
+                current_section_idx += 1
+
+            section_start_tick, section = section_starts[current_section_idx]
+            section_name = section["section"]
+            if msg.type == 'note_on' and msg.velocity > 0:
+                section_note_counts[section_name] += 1
+
+    for section in sections:
+        name = section["section"]
+        bars = section["length_bars"]
+        target_energy = section.get("energy", 1.0)
+        target_notes_per_bar = target_energy * 8
+        measured_notes_per_bar = section_note_counts[name] / bars
+        delta = measured_notes_per_bar - target_notes_per_bar
+
+        print(f"  Section: {name:12s} | Target: {target_notes_per_bar:5.1f} | "
+              f"Measured: {measured_notes_per_bar:5.1f} | "
+              f"Delta: {delta:+5.1f} notes/bar")
+
+
+def analyze_energy_deltas_with_selection(mid, sections, ticks_per_beat=480):
+    section_starts = []
+    current_tick = 0
+    for section in sections:
+        bars = section["length_bars"]
+        section_starts.append((current_tick, section))
+        current_tick += bars * 4 * ticks_per_beat
+
+    print("\n[Energy Delta Analysis with Track Selection]")
+    section_track_energy = {}
+
+    for track_idx, track in enumerate(mid.tracks):
+        current_tick = 0
+        current_section_idx = 0
+
+        for msg in track:
+            current_tick += msg.time
+            while (current_section_idx + 1 < len(section_starts) and
+                   current_tick >= section_starts[current_section_idx + 1][0]):
+                current_section_idx += 1
+
+            section_start_tick, section = section_starts[current_section_idx]
+            section_name = section["section"]
+            section_track_energy.setdefault(section_name, {}).setdefault(track_idx, 0)
+
+            if msg.type == 'note_on' and msg.velocity > 0:
+                section_track_energy[section_name][track_idx] += 1
+
+    for section in sections:
+        name = section["section"]
+        bars = section["length_bars"]
+        target_energy = section.get("energy", 1.0)
+        target_notes_per_bar = target_energy * 8
+
+        track_energies = []
+        track_energy_data = section_track_energy.get(name, {})
+        for track_idx, note_count in track_energy_data.items():
+            energy_per_bar = note_count / bars
+            track_energies.append((track_idx, energy_per_bar))
+
+        selected_tracks = select_tracks_for_energy(target_notes_per_bar, track_energies)
+
+        before_tracks = sorted(track_energy_data.keys())
+        after_tracks = sorted(selected_tracks)
+
+        before_str = ", ".join(str(t) for t in before_tracks)
+        after_str = ", ".join(str(t) for t in after_tracks)
+
+        print(f"  Section: {name:12s} | Target: {target_notes_per_bar:5.1f} notes/bar")
+        print(f"    Before: {before_str}")
+        print(f"    After:  {after_str}\n")
+        
+
 def orchestrate(model_folder, output_file="composition.mid", song_structure_file="song_structure.json"):
     ticks_per_beat = 480
     mid = MidiFile(ticks_per_beat=ticks_per_beat)
@@ -98,6 +381,7 @@ def orchestrate(model_folder, output_file="composition.mid", song_structure_file
                     model_cache[model_key] = (model, token_to_idx, idx_to_token)
 
                 tokens = generate_phrase(model, token_to_idx, idx_to_token, max_length=32, temperature=temperature)
+                tokens = diatonically_adjust_phrase(tokens, section["key"], section["mode"])
                 phrase_ticks = sum(int(token.split("_")[1]) * (ticks_per_beat // 4) for token in tokens if "_" in token)
 
                 if phrase_ticks == 0:
@@ -142,8 +426,18 @@ def orchestrate(model_folder, output_file="composition.mid", song_structure_file
 
         global_time_cursor += section_ticks
 
+    analyze_energy(mid, sections, ticks_per_beat)    
     mid.save(output_file)
     print(f"[Success] MIDI composition exported to {output_file}")
+
+    analyze_energy_deltas(mid, sections, ticks_per_beat)
+    analyze_energy_deltas_with_selection(mid, sections, ticks_per_beat)
+
+
+    #apply_energy_envelope(mid, sections, ticks_per_beat)
+    #analyze_energy(mid, sections, ticks_per_beat)
+    #mid.save(output_file_energy)
+    #print(f"[Success] MIDI composition --pruned-- exported to {output_file_energy}")
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
@@ -151,6 +445,6 @@ if __name__ == "__main__":
     else:
         model_folder = sys.argv[1]
         output_file = sys.argv[2] if len(sys.argv) > 2 else "composition.mid"
+        output_file_energy = "pruned_" + output_file 
         song_structure_file = sys.argv[3] if len(sys.argv) > 3 else "song_structure.json"
         orchestrate(model_folder, output_file, song_structure_file)
-        
